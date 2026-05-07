@@ -1,0 +1,4 @@
+# 单元测试仅校验 Spring 上下文与 MockMvc；此处密钥不会被用于真实 HTTP 调用。
+dashscope:
+  api-key: test-placeholder-key-for-spring-context-only
+  vision-enable-thinking: false
