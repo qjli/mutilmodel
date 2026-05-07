@@ -1,4 +1,4 @@
-import { Badge, Typography } from "antd";
+import { Typography } from "antd";
 import "./AppHeader.css";
 
 export type AppHeaderProps = {
@@ -26,7 +26,7 @@ export function AppHeader({ sessionId }: AppHeaderProps) {
           </div>
           <div className="app-header__titles">
             <Typography.Title level={3} className="app-header__title">
-              多模态智能填报助手
+              智能填报助手
             </Typography.Title>
             <p className="app-header__subtitle">
               对话理解意图 · 结构化回填企业信息 · 支持附件上传与表单校验

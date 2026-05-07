@@ -1,6 +1,8 @@
 package io.agentscope.demo.app.config;
 
 import java.util.concurrent.Executor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -14,6 +16,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @Configuration
 public class AgentscopeAsyncConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentscopeAsyncConfig.class);
+
     /**
      * 有界线程池：用于 {@link io.agentscope.demo.app.web.FormVisionController} 在返回 {@link
      * org.springframework.web.servlet.mvc.method.annotation.SseEmitter} 后异步执行视觉分析。
@@ -26,6 +30,12 @@ public class AgentscopeAsyncConfig {
         ex.setQueueCapacity(200);
         ex.setThreadNamePrefix("agentscope-sse-");
         ex.initialize();
+        log.info(
+                "[async] agentscopeTaskExecutor core={} max={} queue={} prefix={}",
+                ex.getCorePoolSize(),
+                ex.getMaxPoolSize(),
+                ex.getQueueCapacity(),
+                ex.getThreadNamePrefix());
         return ex;
     }
 }

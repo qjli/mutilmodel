@@ -56,6 +56,9 @@ public class DemoChatService {
     public ChatResponse chat(String sessionId, ChatRequest request) {
         String safeId = SessionIds.requireSafeSessionId(sessionId);
         String text = request.content().trim();
+        final long t0 = System.nanoTime();
+
+        log.info("[chat] start sessionId={} contentChars={}", safeId, text.length());
 
         try {
             Toolkit toolkit = new Toolkit();
@@ -96,6 +99,10 @@ public class DemoChatService {
             agent.saveTo(jsonSession, safeId);
 
             if (response == null) {
+                log.warn(
+                        "[chat] empty model response sessionId={} elapsedMs={}",
+                        safeId,
+                        (System.nanoTime() - t0) / 1_000_000L);
                 return new ChatResponse("模型未返回内容，请稍后重试。", null, Instant.now());
             }
 
@@ -119,12 +126,24 @@ public class DemoChatService {
                 patch = structured.formPatch;
             }
 
+            long elapsedMs = (System.nanoTime() - t0) / 1_000_000L;
+            log.info(
+                    "[chat] ok sessionId={} elapsedMs={} replyChars={} formPatchKeys={}",
+                    safeId,
+                    elapsedMs,
+                    reply.length(),
+                    patch != null ? patch.size() : 0);
+
             return new ChatResponse(reply, patch, Instant.now());
         } catch (IOException e) {
-            log.error("failed to load skill, sessionId={}", safeId, e);
+            log.error("[chat] skill load failed sessionId={}", safeId, e);
             return new ChatResponse("服务初始化失败：无法加载表单技能资源。", null, Instant.now());
         } catch (Exception e) {
-            log.error("chat agent failed, sessionId={}", safeId, e);
+            log.error(
+                    "[chat] agent failed sessionId={} elapsedMs={}",
+                    safeId,
+                    (System.nanoTime() - t0) / 1_000_000L,
+                    e);
             String detail = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             return new ChatResponse("调用语言模型失败：" + detail, null, Instant.now());
         }

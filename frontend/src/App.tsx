@@ -145,6 +145,62 @@ function normalizeVisionFormPatch(patch: Record<string, unknown>): Partial<FormV
   return out as Partial<FormValues>;
 }
 
+/** 将模型/后端可能返回的 field_key 转为与 Form.Item name 一致的 camelCase，并映射常见别名。 */
+function normalizeVisionAmbiguityFieldKey(raw: string): string {
+  let k = (raw ?? "").trim();
+  if (!k) return k;
+  if (k.includes("_")) {
+    k = k.replace(/_([a-zA-Z0-9])/g, (_, ch: string) => ch.toUpperCase());
+  }
+  const lower = k.toLowerCase();
+  const aliases: Record<string, string> = {
+    legalrepresentative: "safetyLegalRepresentative",
+    法定代表人: "safetyLegalRepresentative",
+    法人: "safetyLegalRepresentative",
+    负责人: "safetyLegalRepresentative",
+  };
+  return aliases[lower] ?? k;
+}
+
+function resolveAmbiguityOptionValue(opt: VisionAmbiguousField["options"][number]): string {
+  const v = opt.suggested_value;
+  if (typeof v === "string" && v.trim() !== "") return v;
+  const l = opt.label;
+  if (typeof l === "string" && l.trim() !== "") return l.trim();
+  return String(opt.option_id ?? "");
+}
+
+/** 同一语义字段合并为一组选项，避免重复 key 与 field_key 与表单 name 不一致。 */
+function normalizeVisionAmbiguities(list: VisionAmbiguousField[]): VisionAmbiguousField[] {
+  const merged = new Map<string, VisionAmbiguousField>();
+  for (const a of list) {
+    const k = normalizeVisionAmbiguityFieldKey(a.field_key);
+    const cur = merged.get(k);
+    if (!cur) {
+      merged.set(k, { ...a, field_key: k });
+      continue;
+    }
+    const seen = new Set(cur.options.map((o) => String(o.option_id)));
+    const more: typeof a.options = [];
+    for (const o of a.options) {
+      const id = String(o.option_id);
+      if (!seen.has(id)) {
+        seen.add(id);
+        more.push(o);
+      }
+    }
+    merged.set(k, {
+      ...cur,
+      options: [...cur.options, ...more],
+      question_for_user:
+        more.length > 0
+          ? `${cur.question_for_user}\n${a.question_for_user}`
+          : cur.question_for_user,
+    });
+  }
+  return [...merged.values()];
+}
+
 function visionProgressPercent(v: VisionJobState): number {
   if (v.status === "done" || v.status === "error") {
     return 100;
@@ -358,7 +414,7 @@ export default function MultimodalConsole() {
           const patch = normalizeVisionFormPatch(ev.formPatch ?? {});
           form.setFieldsValue(patch);
           persistForm();
-          setAmbiguities(ev.ambiguities ?? []);
+          setAmbiguities(normalizeVisionAmbiguities(ev.ambiguities ?? []));
           setMessages((m) =>
             m.map((row) =>
               row.id === assistantId
@@ -737,23 +793,29 @@ export default function MultimodalConsole() {
                             </Typography.Paragraph>
                             <Radio.Group
                               onChange={(e) => {
+                                const formKey = normalizeVisionAmbiguityFieldKey(amb.field_key);
+                                const picked = String(e.target.value);
                                 const opt = amb.options.find(
-                                  (o) => o.option_id === e.target.value,
+                                  (o) => String(o.option_id) === picked,
                                 );
                                 if (opt) {
                                   form.setFieldsValue({
-                                    [amb.field_key]: opt.suggested_value,
+                                    [formKey]: resolveAmbiguityOptionValue(opt),
                                   } as Partial<FormValues>);
                                   persistForm();
                                 }
                                 setAmbiguities((prev) =>
-                                  prev.filter((a) => a.field_key !== amb.field_key),
+                                  prev.filter(
+                                    (a) =>
+                                      normalizeVisionAmbiguityFieldKey(a.field_key) !==
+                                      formKey,
+                                  ),
                                 );
                               }}
                             >
                               <Space direction="vertical">
                                 {amb.options.map((o) => (
-                                  <Radio key={o.option_id} value={o.option_id}>
+                                  <Radio key={String(o.option_id)} value={o.option_id}>
                                     {o.label}
                                   </Radio>
                                 ))}
@@ -1079,6 +1141,9 @@ export default function MultimodalConsole() {
                       <Col xs={24} lg={12}>
                         <Form.Item label="发证机构" name="transportIssuingAuthority">
                           <Input placeholder="请填写发证机构" allowClear />
+                        </Form.Item>
+                        <Form.Item name="transportLegalRepresentative" hidden preserve>
+                          <Input />
                         </Form.Item>
                       </Col>
                     </Row>

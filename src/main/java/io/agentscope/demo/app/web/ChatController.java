@@ -4,6 +4,8 @@ import io.agentscope.demo.app.service.DemoChatService;
 import io.agentscope.demo.app.web.dto.ChatRequest;
 import io.agentscope.demo.app.web.dto.ChatResponse;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -21,6 +23,8 @@ import org.springframework.web.bind.annotation.RestController;
 @Validated
 public class ChatController {
 
+    private static final Logger log = LoggerFactory.getLogger(ChatController.class);
+
     private final DemoChatService demoChatService;
 
     public ChatController(DemoChatService demoChatService) {
@@ -31,6 +35,8 @@ public class ChatController {
     @PostMapping("/{sessionId}/messages")
     public ChatResponse send(
             @PathVariable String sessionId, @Valid @RequestBody ChatRequest body) {
+        int len = body.content() == null ? 0 : body.content().length();
+        log.info("[chat-http] POST messages pathSessionId={} contentChars={}", sessionId, len);
         return demoChatService.chat(sessionId, body);
     }
 }

@@ -3,6 +3,8 @@ package io.agentscope.demo.app.web;
 import io.agentscope.demo.app.service.FormVisionStreamService;
 import java.util.List;
 import java.util.concurrent.Executor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,6 +24,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RestController
 @RequestMapping("/api/sessions")
 public class FormVisionController {
+
+    private static final Logger log = LoggerFactory.getLogger(FormVisionController.class);
 
     /** 单次 SSE 连接最长保持时间（毫秒），防止僵尸连接占满资源。 */
     private static final long SSE_TIMEOUT_MS = 30L * 60 * 1000;
@@ -46,6 +50,8 @@ public class FormVisionController {
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter visionFormStream(
             @PathVariable String sessionId, @RequestPart("files") List<MultipartFile> files) {
+        int n = files == null ? 0 : files.size();
+        log.info("[vision-sse] accepted pathSessionId={} multipartPartCount={}", sessionId, n);
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         agentscopeTaskExecutor.execute(() -> formVisionStreamService.runAnalysis(sessionId, files, emitter));
         return emitter;

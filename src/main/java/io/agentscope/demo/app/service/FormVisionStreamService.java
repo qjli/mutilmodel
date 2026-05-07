@@ -64,11 +64,17 @@ public class FormVisionStreamService {
      * @param emitter 已返回给客户端的 SSE 连接，用于逐步 {@code send} 与最终 {@code complete}
      */
     public void runAnalysis(String sessionId, List<MultipartFile> files, SseEmitter emitter) {
+        final long t0 = System.nanoTime();
+        String safeId = "";
         try {
-            String safeId = SessionIds.requireSafeSessionId(sessionId);
+            safeId = SessionIds.requireSafeSessionId(sessionId);
             List<MultipartFile> parts =
                     files.stream().filter(f -> f != null && !f.isEmpty()).toList();
             if (parts.isEmpty()) {
+                log.warn(
+                        "[vision] abort no usable images sessionId={} rawPartCount={}",
+                        safeId,
+                        files == null ? 0 : files.size());
                 sendJson(emitter, Map.of("type", "error", "message", "请至少选择一张非空图片"));
                 emitter.complete();
                 return;
@@ -80,8 +86,10 @@ public class FormVisionStreamService {
                             : "image")
                     .toList();
 
-            // —— 阶段 1：顺序读入各张图片，向前端报告「读取进度」——
             int total = parts.size();
+            log.info("[vision] start sessionId={} imageCount={} fileNames={}", safeId, total, names);
+
+            // —— 阶段 1：顺序读入各张图片，向前端报告「读取进度」——
             List<byte[]> imageBytes = new ArrayList<>();
             List<String> mediaTypes = new ArrayList<>();
 
@@ -105,6 +113,13 @@ public class FormVisionStreamService {
                 imageBytes.add(p.getBytes());
                 mediaTypes.add(mediaTypeFor(p));
             }
+
+            long totalImageBytes = imageBytes.stream().mapToLong(b -> b.length).sum();
+            log.info(
+                    "[vision] images loaded sessionId={} imageCount={} totalBytes={}",
+                    safeId,
+                    total,
+                    totalImageBytes);
 
             sendJson(
                     emitter,
@@ -187,6 +202,9 @@ public class FormVisionStreamService {
 
             AtomicReference<FormVisionExtraction> structured = new AtomicReference<>();
 
+            final long tInfer = System.nanoTime();
+            log.info("[vision] agent.stream start sessionId={}", safeId);
+
             agent.stream(List.of(userMsg), streamOpts, FormVisionExtraction.class)
                     .doOnNext(
                             event -> {
@@ -220,9 +238,17 @@ public class FormVisionStreamService {
                             })
                     .blockLast(Duration.ofMinutes(12));
 
+            long inferMs = (System.nanoTime() - tInfer) / 1_000_000L;
+            log.info(
+                    "[vision] agent.stream end sessionId={} inferMs={} hadStructuredInStream={}",
+                    safeId,
+                    inferMs,
+                    structured.get() != null);
+
             // —— 阶段 4：若流结束仍无结构化体，再阻塞补一次 call（兜底）——
             FormVisionExtraction extraction = structured.get();
             if (extraction == null) {
+                log.warn("[vision] structured absent after stream, fallback agent.call sessionId={}", safeId);
                 Msg block = agent.call(userMsg, FormVisionExtraction.class).block(Duration.ofMinutes(8));
                 if (block != null && block.hasStructuredData()) {
                     extraction = block.getStructuredData(FormVisionExtraction.class);
@@ -230,9 +256,20 @@ public class FormVisionStreamService {
             }
 
             if (extraction == null) {
+                log.warn("[vision] structured still absent after fallback sessionId={}", safeId);
                 extraction = new FormVisionExtraction();
                 extraction.reply = "模型未返回可用的结构化结果，请稍后重试或检查图片清晰度。";
             }
+
+            int patchKeys = extraction.formPatch == null ? 0 : extraction.formPatch.size();
+            int ambN = extraction.ambiguities == null ? 0 : extraction.ambiguities.size();
+            int replyChars = extraction.reply == null ? 0 : extraction.reply.length();
+            log.info(
+                    "[vision] emit result sessionId={} formPatchKeys={} ambiguities={} replyChars={}",
+                    safeId,
+                    patchKeys,
+                    ambN,
+                    replyChars);
 
             sendJson(
                     emitter,
@@ -249,8 +286,16 @@ public class FormVisionStreamService {
             agent.saveTo(jsonSession, safeId);
             sendJson(emitter, Map.of("type", "done"));
             emitter.complete();
+            log.info(
+                    "[vision] sse complete sessionId={} totalMs={}",
+                    safeId,
+                    (System.nanoTime() - t0) / 1_000_000L);
         } catch (Exception e) {
-            log.warn("vision form stream failed", e);
+            log.error(
+                    "[vision] failed pathSessionId={} safeSessionId={}",
+                    sessionId,
+                    safeId,
+                    e);
             try {
                 sendJson(
                         emitter,

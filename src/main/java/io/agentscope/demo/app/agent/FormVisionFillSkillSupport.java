@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 从 classpath 加载「企业表单字段约定」技能 {@code form_vision_fill}，供文本对话与多图视觉两条链路复用。
@@ -13,6 +15,8 @@ import java.util.Objects;
  * Ant Design Form 字段名对齐。
  */
 public final class FormVisionFillSkillSupport {
+
+    private static final Logger log = LoggerFactory.getLogger(FormVisionFillSkillSupport.class);
 
     private FormVisionFillSkillSupport() {}
 
@@ -30,6 +34,7 @@ public final class FormVisionFillSkillSupport {
                         "classpath:/skills/form_vision_fill.md")) {
             md = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
+        log.debug("[skill] loaded form_vision_fill markdownChars={}", md.length());
         return AgentSkill.builder()
                 .name("form_vision_fill")
                 .description(

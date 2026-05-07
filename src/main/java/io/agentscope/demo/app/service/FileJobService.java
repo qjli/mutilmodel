@@ -13,6 +13,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -23,6 +25,8 @@ import org.springframework.web.multipart.MultipartFile;
  */
 @Service
 public class FileJobService {
+
+    private static final Logger log = LoggerFactory.getLogger(FileJobService.class);
 
     /** 前端步骤条展示的固定步骤名称（与进度百分比解耦）。 */
     private static final List<String> STEP_NAMES =
@@ -57,6 +61,7 @@ public class FileJobService {
         }
         FileJob job = new FileJob(jobId, fileName, size);
         jobs.put(jobId, job);
+        log.info("[file-job] registered jobId={} fileName={} sizeBytes={}", jobId, fileName, size);
         scheduler.schedule(() -> job.update(20, "reading", 1), 300, TimeUnit.MILLISECONDS);
         scheduler.schedule(() -> job.update(55, "parsing", 2), 900, TimeUnit.MILLISECONDS);
         scheduler.schedule(() -> job.update(85, "parsing", 3), 1600, TimeUnit.MILLISECONDS);
