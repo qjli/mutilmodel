@@ -34,6 +34,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+/**
+ * 多图表单视觉分析：将图片读入内存、组装多模态 {@link Msg}，通过 {@link ReActAgent#stream} 推送 SSE 事件，
+ * 最终产出 {@link FormVisionExtraction} 并写回 {@link JsonSession}。
+ *
+ * <p>事件协议与前端约定：{@code progress} / {@code thinking} / {@code assistant_text} / {@code result} /
+ * {@code done} / {@code error}，每条为 JSON，封装在 SSE {@code data:} 帧内。
+ */
 @Service
 public class FormVisionStreamService {
 
@@ -49,6 +56,13 @@ public class FormVisionStreamService {
         this.formVisionDashScopeChatModel = formVisionDashScopeChatModel;
     }
 
+    /**
+     * 在调用线程之外应由异步执行器调用本方法：内部含阻塞式 {@link reactor.core.publisher.Flux#blockLast}。
+     *
+     * @param sessionId 原始会话 id（经 {@link SessionIds} 校验）
+     * @param files 多部分文件列表（字段名 {@code files}）
+     * @param emitter 已返回给客户端的 SSE 连接，用于逐步 {@code send} 与最终 {@code complete}
+     */
     public void runAnalysis(String sessionId, List<MultipartFile> files, SseEmitter emitter) {
         try {
             String safeId = SessionIds.requireSafeSessionId(sessionId);
@@ -66,6 +80,7 @@ public class FormVisionStreamService {
                             : "image")
                     .toList();
 
+            // —— 阶段 1：顺序读入各张图片，向前端报告「读取进度」——
             int total = parts.size();
             List<byte[]> imageBytes = new ArrayList<>();
             List<String> mediaTypes = new ArrayList<>();
@@ -105,6 +120,7 @@ public class FormVisionStreamService {
                             "label",
                             "正在调用视觉模型（含思考过程流式输出）…"));
 
+            // —— 阶段 2：构造用户多模态消息（说明文字 + 多图 Base64）——
             List<ContentBlock> blocks = new ArrayList<>();
             blocks.add(
                     TextBlock.builder()
@@ -154,6 +170,7 @@ public class FormVisionStreamService {
 
             agent.loadIfExists(jsonSession, safeId);
 
+            // —— 阶段 3：流式调用，映射 ReAct 事件到 SSE JSON——
             StreamOptions streamOpts =
                     StreamOptions.builder()
                             .eventTypes(
@@ -203,6 +220,7 @@ public class FormVisionStreamService {
                             })
                     .blockLast(Duration.ofMinutes(12));
 
+            // —— 阶段 4：若流结束仍无结构化体，再阻塞补一次 call（兜底）——
             FormVisionExtraction extraction = structured.get();
             if (extraction == null) {
                 Msg block = agent.call(userMsg, FormVisionExtraction.class).block(Duration.ofMinutes(8));
@@ -242,12 +260,13 @@ public class FormVisionStreamService {
                                 "message",
                                 e.getMessage() != null ? e.getMessage() : e.toString()));
             } catch (IOException ignored) {
-                // fall through
+                // 客户端已断开等情况：忽略二次发送失败
             }
             emitter.completeWithError(e);
         }
     }
 
+    /** 安全读取 {@link Msg} 的纯文本聚合，避免 NPE。 */
     private static String textOrEmpty(Msg msg) {
         if (msg == null) {
             return "";
@@ -256,6 +275,10 @@ public class FormVisionStreamService {
         return t != null ? t : "";
     }
 
+    /**
+     * 为 {@link ImageBlock} 推断 MIME：优先 multipart 声明的 Content-Type，其次按扩展名回退，默认 {@code
+     * image/jpeg}。
+     */
     private static String mediaTypeFor(MultipartFile f) {
         String ct = f.getContentType();
         if (ct != null && !ct.isBlank() && !MediaType.APPLICATION_OCTET_STREAM_VALUE.equalsIgnoreCase(ct)) {
@@ -281,6 +304,7 @@ public class FormVisionStreamService {
         return "image/jpeg";
     }
 
+    /** 以 {@code application/json} 作为 SSE 帧体编码，便于前端 {@code JSON.parse}。 */
     private void sendJson(SseEmitter emitter, Map<String, ?> payload) throws IOException {
         emitter.send(SseEmitter.event().data(payload, MediaType.APPLICATION_JSON));
     }

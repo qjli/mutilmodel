@@ -11,6 +11,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 会话内文本对话：调用 AgentScope {@link io.agentscope.core.ReActAgent} 与 DashScope 文本模型，返回回复及可选表单补丁。
+ *
+ * <p>{@code sessionId} 会先经 {@link io.agentscope.demo.SessionIds#requireSafeSessionId(String)} 规范化，避免路径穿越。
+ */
 @RestController
 @RequestMapping("/api/sessions")
 @Validated
@@ -22,6 +27,7 @@ public class ChatController {
         this.demoChatService = demoChatService;
     }
 
+    /** 提交一轮用户文本，阻塞直至模型返回（或超时/异常在业务层被消化为错误文案）。 */
     @PostMapping("/{sessionId}/messages")
     public ChatResponse send(
             @PathVariable String sessionId, @Valid @RequestBody ChatRequest body) {

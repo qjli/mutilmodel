@@ -24,6 +24,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
+/**
+ * 控制台文本对话业务：每轮请求构建短生命周期 {@link ReActAgent}，结合 Skill、结构化输出与 {@link JsonSession}
+ * 持久化。
+ *
+ * <p>与 {@link FormVisionStreamService} 共用同一 {@code form_vision_fill} 技能约定，保证表单字段键（camelCase）
+ * 与前端一致。
+ */
 @Service
 public class DemoChatService {
 
@@ -39,6 +46,13 @@ public class DemoChatService {
         this.chatDashScopeChatModel = chatDashScopeChatModel;
     }
 
+    /**
+     * 执行一轮对话：先 {@code loadIfExists} 恢复会话，再 {@code call} 阻塞等待模型，最后 {@code saveTo} 写回。
+     *
+     * @param sessionId 原始会话 id（将经安全校验）
+     * @param request 用户输入正文
+     * @return 自然语言 {@code reply} 与可选 {@code formPatch}；异常时降级为可读错误文案而非向外抛 HTTP 500
+     */
     public ChatResponse chat(String sessionId, ChatRequest request) {
         String safeId = SessionIds.requireSafeSessionId(sessionId);
         String text = request.content().trim();

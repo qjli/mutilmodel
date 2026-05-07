@@ -13,6 +13,11 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+/**
+ * 与「单文件解析任务」相关的演示接口：受理上传并轮询任务状态（非 AgentScope 视觉主流程）。
+ *
+ * <p>多图表单识别请使用 {@link FormVisionController} 的 SSE 接口。
+ */
 @RestController
 @RequestMapping("/api/files")
 public class FileController {
@@ -23,11 +28,13 @@ public class FileController {
         this.fileJobService = fileJobService;
     }
 
+    /** 受理单个 {@code multipart file} 字段，返回 {@code jobId} 供轮询。 */
     @PostMapping(value = "/analyze", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public FileAnalyzeResponse analyze(@RequestPart("file") MultipartFile file) throws IOException {
         return fileJobService.start(file);
     }
 
+    /** 查询模拟解析进度（内存任务表，进程重启后丢失）。 */
     @GetMapping("/{jobId}")
     public FileJobStatusResponse status(@PathVariable String jobId) {
         return fileJobService.status(jobId);
