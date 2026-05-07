@@ -859,22 +859,7 @@ export default function MultimodalConsole() {
                         <Input placeholder="单位：万元" allowClear />
                       </Form.Item>
                     </Col>
-                    <Col xs={24} md={12}>
-                      <Form.Item
-                        label="企业实际驻地"
-                        name="actualLocation"
-                        rules={[{ required: true, message: "请选择实际驻地" }]}
-                      >
-                        <Select
-                          placeholder="请选择"
-                          allowClear
-                          options={[
-                            { value: "与注册地一致", label: "与注册地一致" },
-                            { value: "异地经营", label: "异地经营" },
-                          ]}
-                        />
-                      </Form.Item>
-                    </Col>
+                    
                     <Col xs={24} md={12}>
                       <Form.Item
                         label="注册地邮编"
@@ -955,11 +940,8 @@ export default function MultimodalConsole() {
 
                   <div className="form-subsection">
                     <div className="form-subsection__head">
+                    
                       <Typography.Text strong className="form-subsection__title">
-                        <span className="form-required-star">*</span>
-                        安全生产相关资质附件
-                      </Typography.Text>
-                      <Typography.Text type="secondary" className="form-subsection__sub">
                         危险品经营许可证
                       </Typography.Text>
                     </div>
@@ -1097,9 +1079,6 @@ export default function MultimodalConsole() {
                       <Col xs={24} lg={12}>
                         <Form.Item label="发证机构" name="transportIssuingAuthority">
                           <Input placeholder="请填写发证机构" allowClear />
-                        </Form.Item>
-                        <Form.Item label="法定代表人（负责人）" name="transportLegalRepresentative">
-                          <Input placeholder="请填写法定代表人（负责人）" allowClear />
                         </Form.Item>
                       </Col>
                     </Row>

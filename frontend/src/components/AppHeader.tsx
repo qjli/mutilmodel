@@ -33,19 +33,7 @@ export function AppHeader({ sessionId }: AppHeaderProps) {
             </p>
           </div>
         </div>
-        <nav className="app-header__nav" aria-label="快捷导航">
-          <a className="app-header__nav-link" href="#main-content">
-            首页
-          </a>
-          <a className="app-header__nav-link" href="#main-content">
-            账户设置
-          </a>
-          <a className="app-header__nav-link" href="#main-content">
-            <Badge count={1} size="small" offset={[6, -2]}>
-              <span>消息</span>
-            </Badge>
-          </a>
-        </nav>
+    
         <div className="app-header__aside">
           <span className="app-header__chip">演示环境</span>
           <Typography.Text
