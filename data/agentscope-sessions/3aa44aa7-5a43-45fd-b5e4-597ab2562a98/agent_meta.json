@@ -1,0 +1,6 @@
+{
+  "id" : "94535f74-e0c6-4bc9-a49a-9f6c68bfafdd",
+  "name" : "FormVisionAgent",
+  "description" : "Agent(94535f74-e0c6-4bc9-a49a-9f6c68bfafdd) FormVisionAgent",
+  "systemPrompt" : "你是企业资质与工商信息录入助手。当用户上传证照、许可证等影像时，应使用技能 form_vision_fill 的字段约定进行抽取；输出为中文简述 + 结构化字段。"
+}
