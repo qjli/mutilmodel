@@ -20,6 +20,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  *
  * <p>请求体为 {@code multipart/form-data}，字段名 {@code files} 可重复多次表示多图；服务端在独立线程中执行
  * {@link FormVisionStreamService#runAnalysis}，避免阻塞 Tomcat 工作线程。
+ *
+ * <p>控制器挂在 {@code /api/sessions} 下，与会话资源 URL 习惯一致。
  */
 @RestController
 @RequestMapping("/api/sessions")
@@ -27,10 +29,17 @@ public class FormVisionController {
 
     private static final Logger log = LoggerFactory.getLogger(FormVisionController.class);
 
-    /** 单次 SSE 连接最长保持时间（毫秒），防止僵尸连接占满资源。 */
+    /**
+     * 若连接长期不完成，SseEmitter 到点会抛超时异常，避免线程与句柄泄漏；30 分钟与一次多图分析的上限匹配。
+     */
     private static final long SSE_TIMEOUT_MS = 30L * 60 * 1000;
 
+    /** 真正干活的业务类：读图、调模型、往 emitter 里推事件。 */
     private final FormVisionStreamService formVisionStreamService;
+    /**
+     * 专用于本接口的线程池：下面把重活 {@code runAnalysis} 丢进池里，当前 Servlet 线程只负责「立刻把
+     * SseEmitter 返回给浏览器」。
+     */
     private final Executor agentscopeTaskExecutor;
 
     public FormVisionController(
@@ -49,11 +58,16 @@ public class FormVisionController {
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter visionFormStream(
-            @PathVariable String sessionId, @RequestPart("files") List<MultipartFile> files) {
+            @PathVariable String sessionId,
+            // 与前端 multipart 字段名一致；多图时 Spring 会捆成 List（顺序通常与表单字段顺序一致）
+            @RequestPart("files") List<MultipartFile> files) {
         int n = files == null ? 0 : files.size();
         log.info("[vision-sse] accepted pathSessionId={} multipartPartCount={}", sessionId, n);
+        // 先创建连接对象并设置超时；此时尚未向客户端写任何事件，浏览器已拿到 HTTP 200 + text/event-stream
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+        // 禁止在本方法内同步调用 runAnalysis：内部有 Flux.blockLast，会阻塞很久，拖死 Tomcat 线程
         agentscopeTaskExecutor.execute(() -> formVisionStreamService.runAnalysis(sessionId, files, emitter));
+        // 立即返回，长任务在后台跑；后续事件全部由 FormVisionStreamService 写入同一 emitter
         return emitter;
     }
 }
