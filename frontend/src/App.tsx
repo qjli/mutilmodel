@@ -180,6 +180,28 @@ function resolveAmbiguityOptionValue(opt: VisionAmbiguousField["options"][number
   return String(opt.option_id ?? "");
 }
 
+/** 从歧义 label / suggested_value 中抠出 ISO 日期片段（避免整段 label 传给 DatePicker 导致崩溃）。 */
+function extractIsoDateFromAmbiguityText(s: string): string | null {
+  const m = s.match(/\d{4}-\d{1,2}-\d{1,2}/);
+  return m ? m[0] : null;
+}
+
+/** 歧义点选后写入表单的值：`registrationDate` 必须经 dayjs 化，其它键保持字符串。 */
+function patchFromAmbiguityChoice(
+  formKey: string,
+  opt: VisionAmbiguousField["options"][number],
+): Partial<FormValues> | null {
+  const raw = resolveAmbiguityOptionValue(opt);
+  if (formKey === "registrationDate") {
+    const iso = extractIsoDateFromAmbiguityText(raw);
+    if (!iso) {
+      return null;
+    }
+    return normalizeVisionFormPatch({ registrationDate: iso }) as Partial<FormValues>;
+  }
+  return { [formKey]: raw } as Partial<FormValues>;
+}
+
 /** 同一语义字段合并为一组选项，避免重复 key 与 field_key 与表单 name 不一致。 */
 function normalizeVisionAmbiguities(list: VisionAmbiguousField[]): VisionAmbiguousField[] {
   const merged = new Map<string, VisionAmbiguousField>();
@@ -996,9 +1018,14 @@ export default function MultimodalConsole() {
                                   (o) => String(o.option_id) === picked,
                                 );
                                 if (opt) {
-                                  form.setFieldsValue({
-                                    [formKey]: resolveAmbiguityOptionValue(opt),
-                                  } as Partial<FormValues>);
+                                  const patch = patchFromAmbiguityChoice(formKey, opt);
+                                  if (patch == null) {
+                                    message.warning(
+                                      "未能从选项中解析出有效日期，请在表单「注册日期」中手工选择。",
+                                    );
+                                    return;
+                                  }
+                                  form.setFieldsValue(patch);
                                   persistForm();
                                 }
                                 setAmbiguities((prev) =>
