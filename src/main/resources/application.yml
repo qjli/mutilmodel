@@ -27,8 +27,8 @@ agentscope:
 dashscope:
   api-key: ${DASHSCOPE_API_KEY:sk-76aec4a6346242f997e85dbc75062b28}
   # qwen-vl-max 勿开启，否则会 400（thinking_budget）；更换支持思考的视觉模型后再设 true
-  vision-enable-thinking: false
-  vision-thinking-budget: ${DASHSCOPE_VISION_THINKING_BUDGET:4000}
+  vision-enable-thinking: true
+  vision-thinking-budget: ${DASHSCOPE_VISION_THINKING_BUDGET:1000}
 
 logging:
   level:

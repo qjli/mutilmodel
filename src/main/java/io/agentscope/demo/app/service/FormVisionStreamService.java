@@ -10,6 +10,7 @@ import io.agentscope.core.message.ImageBlock;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.message.TextBlock;
+import io.agentscope.core.message.ThinkingBlock;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.StructuredOutputReminder;
 import io.agentscope.core.session.JsonSession;
@@ -224,7 +225,8 @@ public class FormVisionStreamService {
                             event -> {
                                 try {
                                     if (event.getType() == EventType.REASONING && event.getMessage() != null) {
-                                        String delta = textOrEmpty(event.getMessage());
+                                        // REASONING 增量在 ThinkingBlock#getThinking()；getTextContent() 往往不含思考块 → 此前 thinking SSE 为空
+                                        String delta = reasoningDeltaOrText(event.getMessage());
                                         if (!delta.isBlank()) {
                                             sendJson(
                                                     emitter,
@@ -339,6 +341,32 @@ public class FormVisionStreamService {
         }
         String t = msg.getTextContent();
         return t != null ? t : "";
+    }
+
+    /**
+     * 流式 {@link EventType#REASONING} 事件中，模型推理片段挂在 {@link ThinkingBlock}，而非普通 {@link
+     * TextBlock}；仅调用 {@link Msg#getTextContent()} 会得到空串，导致前端「推理过程」无输出。
+     */
+    private static String reasoningDeltaOrText(Msg msg) {
+        if (msg == null) {
+            return "";
+        }
+        if (msg.hasContentBlocks(ThinkingBlock.class)) {
+            StringBuilder sb = new StringBuilder();
+            for (ThinkingBlock tb : msg.getContentBlocks(ThinkingBlock.class)) {
+                if (tb == null) {
+                    continue;
+                }
+                String s = tb.getThinking();
+                if (s != null && !s.isBlank()) {
+                    sb.append(s);
+                }
+            }
+            if (sb.length() > 0) {
+                return sb.toString();
+            }
+        }
+        return textOrEmpty(msg);
     }
 
     /**

@@ -1,8 +1,11 @@
 import "./App.css";
 import {
+  BulbOutlined,
+  CheckCircleOutlined,
   CloudUploadOutlined,
   FileProtectOutlined,
   FormOutlined,
+  LoadingOutlined,
   MessageOutlined,
   QuestionCircleOutlined,
   SafetyCertificateOutlined,
@@ -14,7 +17,6 @@ import {
   Badge,
   Button,
   Col,
-  Collapse,
   DatePicker,
   Divider,
   Form,
@@ -112,12 +114,20 @@ type VisionJobState = {
   errorMessage?: string;
 };
 
+/** 本轮上传图片的本地预览（ObjectURL），组件卸载时统一 revoke。 */
+type VisionThumbnailSlot = {
+  name: string;
+  previewUrl: string;
+};
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   pending?: boolean;
   vision?: VisionJobState;
+  /** 与 vision 配套：独立进度卡上的缩略图与文件名 */
+  visionThumbnails?: VisionThumbnailSlot[];
   createdAt: number;
 };
 
@@ -201,16 +211,94 @@ function normalizeVisionAmbiguities(list: VisionAmbiguousField[]): VisionAmbiguo
   return [...merged.values()];
 }
 
+/** 顶部进度条：不以磁盘读取为进度；准备阶段占位，进入 infer 后随流式推理/说明长度增长。 */
 function visionProgressPercent(v: VisionJobState): number {
-  if (v.status === "done" || v.status === "error") {
+  if (v.status === "done") {
     return 100;
   }
-  const t = Math.max(1, v.total);
-  if (v.phase === "infer") {
-    const extra = Math.floor((v.thinkingLog.length + v.assistantLog.length) / 120);
-    return Math.min(95, 55 + Math.min(40, extra));
+  if (v.status === "error") {
+    return v.phase === "infer" ? 88 : 12;
   }
-  return Math.round((v.done / t) * 55);
+  if (v.phase === "infer") {
+    const streamLen = v.thinkingLog.length + v.assistantLog.length;
+    const extra = Math.floor(streamLen / 100);
+    return Math.min(96, 10 + Math.min(86, extra));
+  }
+  // load_image 等：仅表示「已提交、尚未进入模型流」，不与 done/total 挂钩
+  if (v.phase === "load_image") {
+    return 6;
+  }
+  return 8;
+}
+
+function visionStreamWeight(v: VisionJobState): number {
+  return v.thinkingLog.length + v.assistantLog.length;
+}
+
+/**
+ * 缩略图状态：准备阶段一律「待分析」；infer 后按流式输出量模拟「识别推进」（多图一次综合调用，无真实逐张 API 进度）。
+ */
+function visionModelSlotStatus(
+  index: number,
+  v: VisionJobState,
+  slotCount: number,
+): "queued" | "reading" | "done" | "failed" {
+  const n = Math.max(1, slotCount);
+  if (v.status === "error") {
+    if (v.phase === "infer") {
+      const base = inferSlotFromStream(index, n, visionStreamWeight(v));
+      if (base === "reading") return "failed";
+      return base;
+    }
+    return "failed";
+  }
+  if (v.status === "done" || v.phase === "done") {
+    return "done";
+  }
+  if (v.phase === "load_image") {
+    return "queued";
+  }
+  if (v.phase === "infer" && v.status === "running") {
+    return inferSlotFromStream(index, n, visionStreamWeight(v));
+  }
+  return "queued";
+}
+
+function inferSlotFromStream(
+  index: number,
+  n: number,
+  streamLen: number,
+): "queued" | "reading" | "done" {
+  if (streamLen < 24) {
+    return index === 0 ? "reading" : "queued";
+  }
+  const span = Math.max(280, Math.floor(2200 / n));
+  const boundary = Math.min(n, streamLen / span);
+  const doneBelow = Math.floor(boundary);
+  if (index < doneBelow) return "done";
+  if (index === doneBelow && doneBelow < n) return "reading";
+  return "queued";
+}
+
+function truncateFileName(name: string, max = 14) {
+  if (name.length <= max) return name;
+  return `${name.slice(0, max - 1)}…`;
+}
+
+function visionThumbCardHint(v: VisionJobState): string | null {
+  if (v.status !== "running") {
+    return null;
+  }
+  if (v.phase === "load_image") {
+    return "正在提交图像至模型（磁盘读取不计入识别进度）";
+  }
+  if (v.phase === "infer") {
+    if (v.label && !v.label.includes("读取第")) {
+      return v.label;
+    }
+    return "模型正在综合分析已上传影像…";
+  }
+  return null;
 }
 
 type RailFocusKey = "chat" | "form" | "enterpriseQual" | "professionalQual";
@@ -261,6 +349,16 @@ export default function MultimodalConsole() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pageRootRef = useRef<HTMLDivElement | null>(null);
   const headerShellRef = useRef<HTMLDivElement | null>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  useEffect(() => {
+    return () => {
+      for (const m of messagesRef.current) {
+        m.visionThumbnails?.forEach((t) => URL.revokeObjectURL(t.previewUrl));
+      }
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const root = pageRootRef.current;
@@ -363,7 +461,11 @@ export default function MultimodalConsole() {
     const listText =
       files.length === 1
         ? `上传图片：${files[0].name}`
-        : `上传 ${files.length} 张图片：${files.map((f) => f.name).join("、")}`;
+        : `已上传 ${files.length} 张图片`;
+    const visionThumbnails: VisionThumbnailSlot[] = files.map((f) => ({
+      name: f.name && f.name.trim() ? f.name : "image",
+      previewUrl: URL.createObjectURL(f),
+    }));
     const userMsgId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
 
@@ -376,6 +478,7 @@ export default function MultimodalConsole() {
         role: "assistant",
         content: "",
         createdAt: now,
+        visionThumbnails,
         vision: {
           status: "running",
           phase: "load_image",
@@ -668,97 +771,191 @@ export default function MultimodalConsole() {
                 <span className="chat-header-title">智能对话</span>
               </header>
               <div className="chat-stream">
-                {messages.map((item) => (
-                  <div
-                    key={item.id}
-                    id={`chat-msg-${item.id}`}
-                    className={`msg-row msg-${item.role}`}
-                  >
-                    <div className="msg-stack">
-                      <div className="msg-meta">
-                        <span>{item.role === "user" ? "用户" : "助手"}</span>
-                        <span>{formatClock(item.createdAt)}</span>
-                        {item.pending ? (
-                          <Badge status="processing" text="生成中" />
-                        ) : null}
-                        {item.vision?.status === "running" ? (
-                          <Badge status="processing" text="识别中" />
-                        ) : null}
-                      </div>
+                {messages.map((item) => {
+                  const visionThumbs = item.visionThumbnails;
+                  const isVisionAssistant =
+                    item.role === "assistant" &&
+                    item.vision &&
+                    visionThumbs &&
+                    visionThumbs.length > 0;
+
+                  if (isVisionAssistant) {
+                    const v = item.vision!;
+                    const pct = visionProgressPercent(v);
+                    const showResultBody =
+                      v.status === "running"
+                        ? v.assistantLog.trim().length > 0
+                        : v.status === "done" || v.status === "error";
+                    const resultText =
+                      v.status === "done" && item.content
+                        ? item.content
+                        : v.status === "error"
+                          ? item.content
+                          : v.assistantLog;
+                    const thumbHint = visionThumbCardHint(v);
+
+                    return (
                       <div
-                        className={`msg-bubble ${item.pending ? "msg-bubble--pending" : ""}`}
+                        key={item.id}
+                        id={`chat-msg-${item.id}`}
+                        className="msg-row msg-assistant msg-assistant--vision"
                       >
-                        {item.pending ? (
-                          <div className="typing" aria-label="生成中">
-                            <span>正在回复</span>
-                            <span className="typing-dot" />
-                            <span className="typing-dot" />
-                            <span className="typing-dot" />
-                          </div>
-                        ) : item.vision && item.vision.status === "running" ? (
-                          <div className="msg-vision">
-                            <Progress
-                              percent={visionProgressPercent(item.vision)}
-                              status="active"
-                              size="small"
-                              aria-label="识别进度"
-                            />
-                            <Typography.Text type="secondary" className="msg-vision__hint">
-                              {item.vision.label ??
-                                (item.vision.fileName
-                                  ? `${item.vision.phase} · ${item.vision.fileName}`
-                                  : item.vision.phase)}
-                            </Typography.Text>
-                            <Collapse
-                              size="small"
-                              className="msg-vision__collapse"
-                              items={[
-                                {
-                                  key: "think",
-                                  label: "模型思考 / 中间输出",
-                                  children: (
-                                    <pre className="msg-vision__pre">
-                                      {item.vision.thinkingLog ||
-                                      item.vision.assistantLog ? (
+                        <div className="msg-assistant-vision-wrap">
+                          <div className="vision-thumb-card" aria-label="模型识别进度">
+                            <div className="vision-thumb-card__head">
+                              <Typography.Text strong className="vision-thumb-card__title">
+                                模型识别进度
+                              </Typography.Text>
+                              <Progress
+                                percent={pct}
+                                status={
+                                  v.status === "error"
+                                    ? "exception"
+                                    : v.status === "done"
+                                      ? "success"
+                                      : "active"
+                                }
+                                size="small"
+                                showInfo
+                              />
+                            </div>
+                            <div
+                              className="vision-thumb-row"
+                              style={{
+                                gridTemplateColumns: `repeat(${visionThumbs.length}, minmax(0, 1fr))`,
+                              }}
+                            >
+                              {visionThumbs.map((thumb, idx) => {
+                                const st = visionModelSlotStatus(idx, v, visionThumbs.length);
+                                return (
+                                  <div
+                                    key={`${item.id}-thumb-${idx}`}
+                                    className={`vision-thumb-cell vision-thumb-cell--${st}`}
+                                  >
+                                    <div className="vision-thumb-frame">
+                                      <img src={thumb.previewUrl} alt="" loading="lazy" />
+                                      {st === "reading" ? (
+                                        <div className="vision-thumb-scan" aria-hidden />
+                                      ) : null}
+                                      {st === "done" ? (
+                                        <span className="vision-thumb-badge" aria-label="已纳入分析">
+                                          <CheckCircleOutlined />
+                                        </span>
+                                      ) : null}
+                                      {st === "failed" ? (
+                                        <span className="vision-thumb-badge vision-thumb-badge--fail" aria-label="失败">
+                                          !
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <div className="vision-thumb-name" title={thumb.name}>
+                                      {truncateFileName(thumb.name)}
+                                    </div>
+                                    <div className="vision-thumb-state">
+                                      {st === "done" ? (
                                         <>
-                                          {item.vision.thinkingLog ? (
-                                            <>
-                                              <Typography.Text type="secondary">
-                                                【思考】
-                                              </Typography.Text>
-                                              {"\n"}
-                                              {item.vision.thinkingLog}
-                                            </>
-                                          ) : null}
-                                          {item.vision.assistantLog ? (
-                                            <>
-                                              {"\n\n"}
-                                              <Typography.Text type="secondary">
-                                                【生成】
-                                              </Typography.Text>
-                                              {"\n"}
-                                              {item.vision.assistantLog}
-                                            </>
-                                          ) : null}
+                                          <CheckCircleOutlined /> 已分析
                                         </>
+                                      ) : st === "reading" ? (
+                                        <>
+                                          <LoadingOutlined spin /> 识别中
+                                        </>
+                                      ) : st === "failed" ? (
+                                        "已中断"
                                       ) : (
-                                        <Typography.Text type="secondary">
-                                          等待模型输出…
-                                        </Typography.Text>
+                                        "排队"
                                       )}
-                                    </pre>
-                                  ),
-                                },
-                              ]}
-                            />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {thumbHint ? (
+                              <Typography.Text type="secondary" className="vision-thumb-card__hint">
+                                {thumbHint}
+                              </Typography.Text>
+                            ) : null}
                           </div>
-                        ) : (
-                          item.content
-                        )}
+
+                          <div className="msg-stack msg-stack--vision-follow">
+                            <div className="msg-meta">
+                              <span>助手</span>
+                              <span>{formatClock(item.createdAt)}</span>
+                              {v.status === "running" ? (
+                                <Badge status="processing" text="识别中" />
+                              ) : null}
+                            </div>
+                            <div className="msg-bubble msg-bubble--vision-split">
+                              <section className="vision-thinking-panel" aria-label="推理过程">
+                                <div className="vision-thinking-panel__head">
+                                  <BulbOutlined className="vision-thinking-panel__icon" aria-hidden />
+                                  <Typography.Text strong>推理过程</Typography.Text>
+                                  <Typography.Text type="secondary" className="vision-thinking-panel__sub">
+                                    模型中间推理（流式）
+                                  </Typography.Text>
+                                </div>
+                                <pre className="vision-thinking-panel__body">
+                                  {v.thinkingLog
+                                    ? v.thinkingLog
+                                    : v.status === "running"
+                                      ? "等待模型推理片段…"
+                                      : "（本轮无单独推理片段）"}
+                                </pre>
+                              </section>
+
+                              <section className="vision-result-panel" aria-label="识别说明">
+                                <Typography.Text strong className="vision-result-panel__head">
+                                  识别说明
+                                </Typography.Text>
+                                <div className="vision-result-panel__body">
+                                  {showResultBody ? (
+                                    <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
+                                      {resultText}
+                                    </Typography.Paragraph>
+                                  ) : v.status === "running" ? (
+                                    <Typography.Text type="secondary">等待模型生成说明…</Typography.Text>
+                                  ) : null}
+                                </div>
+                              </section>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div
+                      key={item.id}
+                      id={`chat-msg-${item.id}`}
+                      className={`msg-row msg-${item.role}`}
+                    >
+                      <div className="msg-stack">
+                        <div className="msg-meta">
+                          <span>{item.role === "user" ? "用户" : "助手"}</span>
+                          <span>{formatClock(item.createdAt)}</span>
+                          {item.pending ? (
+                            <Badge status="processing" text="生成中" />
+                          ) : null}
+                        </div>
+                        <div
+                          className={`msg-bubble ${item.pending ? "msg-bubble--pending" : ""}`}
+                        >
+                          {item.pending ? (
+                            <div className="typing" aria-label="生成中">
+                              <span>正在回复</span>
+                              <span className="typing-dot" />
+                              <span className="typing-dot" />
+                              <span className="typing-dot" />
+                            </div>
+                          ) : (
+                            item.content
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
 

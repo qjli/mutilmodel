@@ -71,7 +71,7 @@ public final class DashScopeSupport {
         }
         return DashScopeChatModel.builder()
                 .apiKey(requireApiKey(apiKey))
-                .modelName("qwen-vl-max")
+                .modelName("qwen3-vl-plus")
                 .stream(stream)
                 .enableThinking(enableThinking)
                 .formatter(new DashScopeChatFormatter())
