@@ -37,5 +37,4 @@ public class MultimodalDemoApplication {
             log.info("[boot] multimodal-demo ready activeProfiles={}", profiles);
         };
     }
-    //--以上未添加引导功能SKILL
 }
