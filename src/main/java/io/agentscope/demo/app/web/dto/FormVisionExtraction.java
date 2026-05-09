@@ -26,5 +26,11 @@ public class FormVisionExtraction {
     @JsonProperty("reply")
     public String reply;
 
+    /**
+     * 上传引导卡字段：多图视觉链路中由服务端固定为 {@code null}；材料卡仅在文本对话命中「如何使用/缺件」等意图时下发。
+     */
+    @JsonProperty("upload_guide")
+    public UploadGuideDto uploadGuide;
+
     public FormVisionExtraction() {}
 }

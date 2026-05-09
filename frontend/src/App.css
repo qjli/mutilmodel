@@ -656,6 +656,121 @@
   color: rgba(0, 0, 0, 0.88);
 }
 
+.vision-upload-guide {
+  border-top: 1px solid #ececec;
+  background: #fff;
+  padding: 12px 14px 14px;
+}
+
+.vision-upload-guide__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.vision-upload-guide__icon {
+  color: #1677ff;
+  font-size: 16px;
+}
+
+.vision-upload-guide__title {
+  font-size: 14px;
+}
+
+.vision-upload-guide__satisfied {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  border-radius: 6px;
+}
+
+.vision-upload-guide__check {
+  color: #52c41a;
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.vision-upload-guide__grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+}
+
+.vision-upload-guide__card {
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fafafa;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* 材料卡缩略图：固定可视高度，横竖版证照均在框内等比完整显示 */
+.vision-upload-guide__thumb {
+  position: relative;
+  width: 100%;
+  height: 140px;
+  background: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 6px;
+  overflow: hidden;
+}
+
+.vision-upload-guide__thumb-img {
+  position: relative;
+  z-index: 0;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+/* 样图印章：示意非真实证面 */
+.vision-upload-guide__sample-seal {
+  position: absolute;
+  right: 8px;
+  bottom: 10px;
+  z-index: 1;
+  padding: 2px 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #b71c1c;
+  border: 2px solid rgba(183, 28, 28, 0.92);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(183, 28, 28, 0.2);
+  transform: rotate(-14deg);
+  pointer-events: none;
+  line-height: 1.2;
+}
+
+.vision-upload-guide__meta {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vision-upload-guide__card-title {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.vision-upload-guide__card-sub {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .msg-stack {
   max-width: min(92%, 640px);
   display: flex;
@@ -684,6 +799,15 @@
   white-space: pre-wrap;
   word-break: break-word;
   border: 1px solid #e8e8e8;
+}
+
+.msg-bubble-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-bubble > .vision-upload-guide {
+  margin-top: 12px;
 }
 
 .msg-row.msg-assistant .msg-bubble {

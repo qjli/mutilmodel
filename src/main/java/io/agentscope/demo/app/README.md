@@ -15,12 +15,13 @@
 | `config/` | Bean 与外部化配置：DashScope 模型、磁盘 `JsonSession`、SSE 用线程池、CORS 等 |
 | `web/` | REST 控制器与统一异常；`web/dto/` 为请求/响应与结构化输出 DTO |
 | `service/` | 业务实现：视觉流、文本对话、（演示用）单文件假任务 |
-| `agent/` | 从 classpath 加载 `form_vision_fill` 技能（`FormVisionFillSkillSupport`），供视觉与文本两条链路注册到 `SkillBox` |
+| `agent/` | 从 classpath 加载 `form_vision_fill` 与 `upload_guide_dialog` 技能，供视觉与文本链路注册到 `SkillBox` |
 
 **非本包但强相关**：
 
 - `io.agentscope.demo.SessionIds`：对 URL 中的 `sessionId` 做安全校验（单路径段、防 `..` 等），供 `JsonSession` 落盘目录名。
-- `classpath:/skills/form_vision_fill.md`：技能正文，与前端表单 `name`、SSE 结构化字段键约定一致。
+- `classpath:/skills/form_vision_fill.md`：表单字段与歧义约定。  
+- `classpath:/skills/upload_guide_dialog.md`：上传操作说明、`upload_guide` 材料卡与白名单。
 
 ---
 
@@ -50,8 +51,10 @@ flowchart TB
   FVS --> JS
   DCS --> DS
   DCS --> JS
-  FVS --> SK[form_vision_fill Skill]
-  DCS --> SK
+  FVS --> SK1[form_vision_fill]
+  FVS --> SK2[upload_guide_dialog]
+  DCS --> SK1
+  DCS --> SK2
 ```
 
 ---
@@ -66,7 +69,7 @@ flowchart TB
    - `SessionIds.requireSafeSessionId` → 过滤空 part → 顺序 `getBytes` 读图。  
    - 每读一张仍推送 `progress`（`phase=load_image`，`done/total/fileName`）：便于排障与旧版 UI；**主进度语义以模型流为准的实现见前端**（见 §10）。  
    - 推送 `phase=infer` 后构造多模态 `Msg`（任务说明 `TextBlock` + 多图 `ImageBlock` Base64）。  
-   - 注册技能 **`form_vision_fill`**，构建 `ReActAgent`，`loadIfExists(jsonSession, safeId)`。  
+   - 注册技能 **`form_vision_fill`** 与 **`upload_guide_dialog`**，构建 `ReActAgent`，`loadIfExists(jsonSession, safeId)`。  
    - `agent.stream(..., StreamOptions, FormVisionExtraction.class)`：`doOnNext` 将 AgentScope 事件映射为 SSE JSON（见下表「推理字段」）。  
    - 流结束若仍无结构化体 → **兜底** `agent.call(userMsg, FormVisionExtraction.class)`。  
    - 发送 `result`，`saveTo`，`done`，`emitter.complete()`；异常路径 `error` + `completeWithError`。  
@@ -82,15 +85,15 @@ flowchart TB
 | `progress` | 阶段与计数：`phase` 如 `load_image` / `infer`，`done` / `total`，可选 `label` / `fileName` |
 | `thinking` | 推理片段增量 `delta`（来自 `ThinkingBlock` 聚合） |
 | `assistant_text` | 面向用户的说明文本增量 `delta`（`SUMMARY` / `AGENT_RESULT` 的文本） |
-| `result` | 最终：`reply`、`formPatch`、`ambiguities` |
+| `result` | 最终：`reply`、`formPatch`、`ambiguities`、`uploadGuide` |
 | `done` | 正常结束 |
 | `error` | 可读错误 `message` |
 
 ### 3.2 会话内文本对话
 
 1. `POST /api/sessions/{sessionId}/messages`，JSON `ChatRequest`。  
-2. `DemoChatService`：加载 **`form_vision_fill`** → `ReActAgent` → `loadIfExists` → `call(..., ChatFormAssistantResult.class)` → `saveTo`。  
-3. 返回 `ChatResponse`：`reply` + 可选 `formPatch`；异常在业务层吞掉为可读文案，HTTP 200。日志：`[chat]`、`[chat-http]`。
+2. `DemoChatService`：加载 **`form_vision_fill`** 与 **`upload_guide_dialog`** → `ReActAgent` → `loadIfExists` → `call(..., ChatFormAssistantResult.class)` → `saveTo`。  
+3. 返回 `ChatResponse`：`reply` + 可选 `formPatch` + 可选 `uploadGuide`；异常在业务层吞掉为可读文案，HTTP 200。日志：`[chat]`、`[chat-http]`。
 
 ### 3.3 演示：单文件「解析任务」
 
@@ -157,7 +160,7 @@ flowchart TB
 | `[chat]`、`[chat-http]` | `DemoChatService`、`ChatController` |
 | `[file-demo]`、`[file-job]` | `FileController`、`FileJobService` |
 | `[api]` | `ApiExceptionHandler` |
-| `[skill]` | `FormVisionFillSkillSupport`（DEBUG：技能 Markdown 长度） |
+| `[skill]` | `FormVisionFillSkillSupport`、`UploadGuideDialogSkillSupport`（DEBUG：技能 Markdown 长度） |
 
 ---
 

@@ -40,9 +40,13 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  normalizeVisionUploadGuide,
   postJson,
   postVisionFormStream,
+  resolveSampleImageUrl,
+  sanitizeAssistantReplyDisplay,
   type VisionAmbiguousField,
+  type VisionUploadGuide,
 } from "./api";
 import { AppHeader } from "./components/AppHeader";
 
@@ -50,6 +54,7 @@ type ChatResponse = {
   reply: string;
   formPatch?: Record<string, unknown>;
   serverTime: string;
+  uploadGuide?: VisionUploadGuide | null;
 };
 
 type FormValues = {
@@ -128,6 +133,8 @@ type ChatMessage = {
   vision?: VisionJobState;
   /** 与 vision 配套：独立进度卡上的缩略图与文件名 */
   visionThumbnails?: VisionThumbnailSlot[];
+  /** 视觉识别完成后可选：结构化材料清单卡（upload_guide） */
+  uploadGuide?: VisionUploadGuide;
   createdAt: number;
 };
 
@@ -344,6 +351,60 @@ function formatClock(ts: number) {
   });
 }
 
+/** 材料清单卡（方案 C）：视觉识别气泡与纯文本气泡共用。 */
+function UploadGuideCardSection({ guide }: { guide: VisionUploadGuide }) {
+  return (
+    <section className="vision-upload-guide" aria-label="材料清单与补传引导">
+      <div className="vision-upload-guide__head">
+        <CloudUploadOutlined className="vision-upload-guide__icon" aria-hidden />
+        <Typography.Text strong className="vision-upload-guide__title">
+          {guide.card_title ?? "材料清单"}
+        </Typography.Text>
+      </div>
+      {guide.satisfied_labels.length > 0 ? (
+        <div className="vision-upload-guide__satisfied">
+          <CheckCircleOutlined className="vision-upload-guide__check" aria-hidden />
+          <Typography.Text type="secondary">
+            已上传 / 已识别：{guide.satisfied_labels.join("、")}
+          </Typography.Text>
+        </div>
+      ) : null}
+      {guide.missing_items.length > 0 ? (
+        <div className="vision-upload-guide__grid">
+          {guide.missing_items.map((mat) => (
+            <div key={`ug-${mat.sample_image_id}`} className="vision-upload-guide__card">
+              <div
+                className="vision-upload-guide__thumb"
+                title="图示为样证扫描件，仅作版式参考，非任何真实主体证照"
+              >
+                <img
+                  className="vision-upload-guide__thumb-img"
+                  src={resolveSampleImageUrl(mat.sample_image_id)}
+                  alt=""
+                  loading="lazy"
+                />
+                <span className="vision-upload-guide__sample-seal" aria-hidden="true">
+                  样图
+                </span>
+              </div>
+              <div className="vision-upload-guide__meta">
+                <Typography.Text strong className="vision-upload-guide__card-title">
+                  {mat.title}
+                </Typography.Text>
+                {mat.subtitle ? (
+                  <Typography.Text type="secondary" className="vision-upload-guide__card-sub">
+                    {mat.subtitle}
+                  </Typography.Text>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export default function MultimodalConsole() {
   const { message, notification } = App.useApp();
   const [form] = Form.useForm<FormValues>();
@@ -540,12 +601,14 @@ export default function MultimodalConsole() {
           form.setFieldsValue(patch);
           persistForm();
           setAmbiguities(normalizeVisionAmbiguities(ev.ambiguities ?? []));
+          const uploadGuide = normalizeVisionUploadGuide(ev.uploadGuide);
           setMessages((m) =>
             m.map((row) =>
               row.id === assistantId
                 ? {
                     ...row,
                     content: ev.reply ?? "",
+                    uploadGuide,
                     vision: row.vision
                       ? {
                           ...row.vision,
@@ -637,10 +700,17 @@ export default function MultimodalConsole() {
         form.setFieldsValue(normalizeVisionFormPatch(data.formPatch));
         persistForm();
       }
+      const uploadGuide = normalizeVisionUploadGuide(data.uploadGuide);
       setMessages((m) =>
         m.map((row) =>
           row.id === pendingId
-            ? { ...row, content: data.reply, pending: false, createdAt: Date.now() }
+            ? {
+                ...row,
+                content: data.reply,
+                pending: false,
+                createdAt: Date.now(),
+                uploadGuide,
+              }
             : row,
         ),
       );
@@ -932,13 +1002,17 @@ export default function MultimodalConsole() {
                                 <div className="vision-result-panel__body">
                                   {showResultBody ? (
                                     <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
-                                      {resultText}
+                                      {sanitizeAssistantReplyDisplay(resultText)}
                                     </Typography.Paragraph>
                                   ) : v.status === "running" ? (
                                     <Typography.Text type="secondary">等待模型生成说明…</Typography.Text>
                                   ) : null}
                                 </div>
                               </section>
+
+                              {v.status === "done" && item.uploadGuide ? (
+                                <UploadGuideCardSection guide={item.uploadGuide} />
+                              ) : null}
                             </div>
                           </div>
                         </div>
@@ -971,7 +1045,14 @@ export default function MultimodalConsole() {
                               <span className="typing-dot" />
                             </div>
                           ) : (
-                            item.content
+                            <>
+                              <div className="msg-bubble-text">
+                                {sanitizeAssistantReplyDisplay(item.content)}
+                              </div>
+                              {item.uploadGuide ? (
+                                <UploadGuideCardSection guide={item.uploadGuide} />
+                              ) : null}
+                            </>
                           )}
                         </div>
                       </div>

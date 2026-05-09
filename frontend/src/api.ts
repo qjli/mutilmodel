@@ -66,6 +66,210 @@ export type VisionAmbiguousField = {
   options: VisionAmbiguousOption[];
 };
 
+/** 与后端 `upload_guide` / SSE `uploadGuide` 嵌套字段一致（Jackson snake_case）。 */
+export type VisionUploadGuideItem = {
+  sample_image_id: string;
+  title: string;
+  subtitle?: string;
+};
+
+export type VisionUploadGuide = {
+  card_title?: string;
+  satisfied_labels: string[];
+  missing_items: VisionUploadGuideItem[];
+};
+
+/** 仅四种示意图，与技能 `upload_guide_dialog` 白名单一致。 */
+const SAMPLE_IMAGE_PATHS: Record<string, string> = {
+  BUSINESS_LICENSE: "/samples/business-license.png",
+  ID_CARD_FRONT: "/samples/id-card-front.png",
+  ROAD_TRANSPORT_PERMIT: "/samples/road-transport-permit.png",
+  SAFETY_PRODUCTION_PERMIT: "/samples/safety-production-permit.png",
+};
+
+/** 与 `sample_image_id` 对应的中文全称（卡片 title 与展示用，防模型发散）。 */
+const CANONICAL_MATERIAL_TITLE: Record<keyof typeof SAMPLE_IMAGE_PATHS, string> = {
+  BUSINESS_LICENSE: "营业执照",
+  ID_CARD_FRONT: "身份证人像面",
+  ROAD_TRANSPORT_PERMIT: "道路危险货物运输许可证",
+  SAFETY_PRODUCTION_PERMIT: "危险化学品经营许可证",
+};
+
+const MATERIAL_TITLE_SET = new Set<string>(Object.values(CANONICAL_MATERIAL_TITLE));
+
+const DEFAULT_ONBOARDING_SUBTITLE: Record<keyof typeof SAMPLE_IMAGE_PATHS, string> = {
+  BUSINESS_LICENSE: "企业登记主体信息",
+  ID_CARD_FRONT: "法人或经办人身份核验",
+  ROAD_TRANSPORT_PERMIT: "危化品道路运输资质",
+  SAFETY_PRODUCTION_PERMIT: "安全生产与危化经营许可信息",
+};
+
+/**
+ * 展示层兜底：去掉模型偶发的 Markdown 裂图、「（如适用）」等，避免正文出现无意义链接。
+ */
+export function sanitizeAssistantReplyDisplay(raw: string): string {
+  if (!raw) {
+    return raw;
+  }
+  return raw
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/[（(]\s*如适用\s*[）)]/g, "")
+    .replace(/[（(]\s*若适用\s*[）)]/g, "")
+    .replace(/[（(]\s*视情况\s*[）)]/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function dedupeMissingBySampleId(items: VisionUploadGuideItem[]): VisionUploadGuideItem[] {
+  const seen = new Set<string>();
+  const out: VisionUploadGuideItem[] = [];
+  for (const it of items) {
+    if (seen.has(it.sample_image_id)) {
+      continue;
+    }
+    seen.add(it.sample_image_id);
+    out.push(it);
+  }
+  return out;
+}
+
+/** 是否应补全为四种证照（首次说明、或模型重复同一类）。 */
+function shouldExpandToFourSamples(
+  cardTitle: string | undefined,
+  items: VisionUploadGuideItem[],
+): boolean {
+  const t = (cardTitle ?? "").trim();
+  const uniq = new Set(items.map((i) => i.sample_image_id));
+  /** 模型把多条写成同一 sample_image_id（如两张营业执照）。 */
+  if (items.length >= 2 && uniq.size === 1) {
+    return true;
+  }
+  if (items.length === 0 || items.length >= 4) {
+    return false;
+  }
+
+  /**
+   * 标题像「仍缺某某证」且只列 1 条时，多为真缺一件，勿扩成四卡。
+   * 「请上传以下文件」等虽只有一个 missing，但是总览口吻，应扩成四卡。
+   */
+  const looksLikeSingleGap =
+    items.length === 1 &&
+    /仍缺|仅缺|还需补充|尚缺|补传/.test(t) &&
+    !/下列|以下|所需证照|四种|四类|请上传以下|示意图|样例/.test(t);
+  if (looksLikeSingleGap) {
+    return false;
+  }
+
+  const howToInTitle =
+    /如何使用|怎么用|使用说明|怎么上传|如何上传|初次|首次|新手指南/.test(t);
+  /** 与「请上传以下文件」等模型常见 card_title 对齐；/howTo/ 往往在 reply 里而不在标题中。 */
+  const listStyleOnboarding =
+    /请上传以下/.test(t) ||
+    /以下(文件|材料|证照|图片|照片)/.test(t) ||
+    /下列(文件|材料|证照)/.test(t) ||
+    (t.includes("下列") && t.includes("所需")) ||
+    /上传指引|示意图|样例|四证|四类|四种证件|请传照片/.test(t) ||
+    (/材料清单/.test(t) && !/仍缺|仅缺/.test(t));
+
+  if ((howToInTitle || listStyleOnboarding) && items.length < 4) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 补全为四种示意卡片：先保留模型已给出的条目顺序，再补上缺失的 id（补项按 id 字母序追加，与技能「顺序不限」一致）。
+ */
+function buildFourCanonicalMissing(existing: VisionUploadGuideItem[]): VisionUploadGuideItem[] {
+  const byId = new Map(existing.map((m) => [m.sample_image_id, m]));
+  const allIds = (Object.keys(SAMPLE_IMAGE_PATHS) as (keyof typeof SAMPLE_IMAGE_PATHS)[]).sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const ordered: (keyof typeof SAMPLE_IMAGE_PATHS)[] = [];
+  for (const it of existing) {
+    if (!ordered.includes(it.sample_image_id)) {
+      ordered.push(it.sample_image_id);
+    }
+  }
+  for (const id of allIds) {
+    if (!ordered.includes(id)) {
+      ordered.push(id);
+    }
+  }
+  return ordered.map((id) => ({
+    sample_image_id: id,
+    title: CANONICAL_MATERIAL_TITLE[id],
+    subtitle: byId.get(id)?.subtitle ?? DEFAULT_ONBOARDING_SUBTITLE[id],
+  }));
+}
+
+/** 废弃代号 → 现用四选一（兼容旧模型输出）。 */
+const LEGACY_SAMPLE_IMAGE_ID: Record<string, keyof typeof SAMPLE_IMAGE_PATHS> = {
+  HAZMAT_PERMIT: "SAFETY_PRODUCTION_PERMIT",
+  GENERIC_LICENSE: "BUSINESS_LICENSE",
+};
+
+function canonicalSampleImageId(raw: string): keyof typeof SAMPLE_IMAGE_PATHS {
+  let id = (raw ?? "").trim().toUpperCase().replace(/-/g, "_") as string;
+  const mapped = LEGACY_SAMPLE_IMAGE_ID[id];
+  if (mapped) {
+    id = mapped;
+  }
+  if (id in SAMPLE_IMAGE_PATHS) {
+    return id as keyof typeof SAMPLE_IMAGE_PATHS;
+  }
+  return "BUSINESS_LICENSE";
+}
+
+/** 将模型返回的 `sample_image_id` 映射为 `public/samples` 下 PNG 示意缩略图（统一在 CSS 中适配尺寸）。 */
+export function resolveSampleImageUrl(sampleImageId: string): string {
+  return SAMPLE_IMAGE_PATHS[canonicalSampleImageId(sampleImageId)];
+}
+
+/** 校验并规整 SSE {@code uploadGuide}，无有效内容时返回 {@code undefined}。 */
+export function normalizeVisionUploadGuide(raw: unknown): VisionUploadGuide | undefined {
+  if (raw == null || typeof raw !== "object") {
+    return undefined;
+  }
+  const o = raw as Record<string, unknown>;
+  const rawMissing = o.missing_items;
+  const rawSat = o.satisfied_labels;
+  const card_title =
+    typeof o.card_title === "string" && o.card_title.trim() !== "" ? o.card_title.trim() : undefined;
+  let missing_items: VisionUploadGuideItem[] = Array.isArray(rawMissing)
+    ? rawMissing
+        .filter((x): x is Record<string, unknown> => x != null && typeof x === "object" && !Array.isArray(x))
+        .map((it) => {
+          const sidRaw = String(it.sample_image_id ?? "").trim();
+          const sid = canonicalSampleImageId(sidRaw);
+          const subtitle =
+            typeof it.subtitle === "string" && it.subtitle.trim() !== "" ? it.subtitle.trim() : undefined;
+          return {
+            sample_image_id: sid,
+            title: CANONICAL_MATERIAL_TITLE[sid],
+            subtitle,
+          };
+        })
+    : [];
+
+  missing_items = dedupeMissingBySampleId(missing_items);
+  if (shouldExpandToFourSamples(card_title, missing_items)) {
+    missing_items = buildFourCanonicalMissing(missing_items);
+  }
+
+  const satisfied_labels = Array.isArray(rawSat)
+    ? rawSat
+        .filter((x): x is string => typeof x === "string" && x.trim() !== "")
+        .map((s) => s.trim())
+        .filter((s) => MATERIAL_TITLE_SET.has(s))
+    : [];
+  if (!card_title && missing_items.length === 0 && satisfied_labels.length === 0) {
+    return undefined;
+  }
+  return { card_title, satisfied_labels, missing_items };
+}
+
 export type VisionSseEvent =
   | {
       type: "progress";
@@ -82,6 +286,7 @@ export type VisionSseEvent =
       reply: string;
       formPatch: Record<string, unknown>;
       ambiguities: VisionAmbiguousField[];
+      uploadGuide?: VisionUploadGuide | null;
     }
   | { type: "done" }
   | { type: "error"; message: string };

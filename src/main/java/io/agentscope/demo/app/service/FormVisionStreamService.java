@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -156,7 +157,9 @@ public class FormVisionStreamService {
                                             + "）。\n"
                                             + "请务必加载并遵循技能 **form_vision_fill** 中的字段键与歧义规则，"
                                             + "综合全部图片抽取与企业登记表单相关的信息。\n"
-                                            + "仅输出结构化结果通道要求的 JSON（form_patch / ambiguities / reply），"
+                                            + "**upload_guide 在本链路必须为 null**（本请求仅为影像分析，未包含「如何使用/缺件」类"
+                                            + "文字询问；材料卡仅在文本对话命中相应意图时由其它路由生成）。\n"
+                                            + "仅输出结构化结果通道要求的 JSON（form_patch / ambiguities / reply；upload_guide 为 null），"
                                             + "日期与日期范围使用 ISO-8601 字符串。")
                             .build());
             for (int i = 0; i < imageBytes.size(); i++) {
@@ -184,8 +187,12 @@ public class FormVisionStreamService {
                     ReActAgent.builder()
                             .name("FormVisionAgent")
                             .sysPrompt(
-                                    "你是企业资质与工商信息录入助手。当用户上传证照、许可证等影像时，"
-                                            + "应使用技能 form_vision_fill 的字段约定进行抽取；输出为中文简述 + 结构化字段。")
+                                    "你是企业资质与工商信息录入助手。用户已上传影像：仅加载 **form_vision_fill** 做"
+                                            + " form_patch / ambiguities / reply；**不要**加载 upload_guide_dialog，**upload_guide 恒为"
+                                            + " null**。\n"
+                                            + "若 reply 中须提及证照中文名，仅允许四种全称：营业执照、身份证人像面、道路危险货物"
+                                            + "运输许可证、危险化学品经营许可证；禁止「如适用」式发散与括号后缀。\n"
+                                            + "reply 禁止 Markdown 图片与任何 http(s) 占位链接。")
                             .model(formVisionDashScopeChatModel)
                             .toolkit(toolkit)
                             .skillBox(skillBox)
@@ -280,6 +287,9 @@ public class FormVisionStreamService {
                 extraction.reply = "模型未返回可用的结构化结果，请稍后重试或检查图片清晰度。";
             }
 
+            // 视觉链路不加载 upload_guide_dialog：丢弃模型偶发的 upload_guide，避免与表单抽取技能交叉。
+            extraction.uploadGuide = null;
+
             int patchKeys = extraction.formPatch == null ? 0 : extraction.formPatch.size();
             int ambN = extraction.ambiguities == null ? 0 : extraction.ambiguities.size();
             int replyChars = extraction.reply == null ? 0 : extraction.reply.length();
@@ -290,18 +300,15 @@ public class FormVisionStreamService {
                     ambN,
                     replyChars);
 
-            // 与前端约定：一次 JSON 内含 reply + formPatch + ambiguities，便于直接 setFieldsValue
-            sendJson(
-                    emitter,
-                    Map.of(
-                            "type",
-                            "result",
-                            "reply",
-                            extraction.reply != null ? extraction.reply : "",
-                            "formPatch",
-                            extraction.formPatch != null ? extraction.formPatch : Map.of(),
-                            "ambiguities",
-                            extraction.ambiguities != null ? extraction.ambiguities : List.of()));
+            // 与前端约定：一次 JSON 内含 reply + formPatch + ambiguities + uploadGuide，便于直接 setFieldsValue 与卡片区
+            HashMap<String, Object> resultPayload = new HashMap<>();
+            resultPayload.put("type", "result");
+            resultPayload.put("reply", extraction.reply != null ? extraction.reply : "");
+            resultPayload.put("formPatch", extraction.formPatch != null ? extraction.formPatch : Map.of());
+            resultPayload.put(
+                    "ambiguities", extraction.ambiguities != null ? extraction.ambiguities : List.of());
+            resultPayload.put("uploadGuide", extraction.uploadGuide);
+            sendJson(emitter, resultPayload);
 
             // 把本轮 Agent 状态写入 session 目录，供后续文本对话或其它请求复用
             agent.saveTo(jsonSession, safeId);
