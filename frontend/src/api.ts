@@ -134,7 +134,29 @@ function dedupeMissingBySampleId(items: VisionUploadGuideItem[]): VisionUploadGu
   return out;
 }
 
-/** 是否应补全为四种证照（首次说明、或模型重复同一类）。 */
+/**
+ * 标题像「总览 / 首次说明 / 四证示意」：模型常把此类场景的 {@code card_title} 写成「所需上传证照」等，
+ * 但 {@code missing_items} 只填一条；此前端补全与技能 {@code upload_guide_dialog} 对齐。
+ */
+function titleImpliesFourSampleOnboarding(cardTitle: string | undefined): boolean {
+  const t = (cardTitle ?? "").trim();
+  if (!t) {
+    return false;
+  }
+  return (
+    /如何使用|怎么用|使用说明|怎么上传|如何上传|初次|首次|新手指南/.test(t) ||
+    /请上传以下/.test(t) ||
+    /以下(文件|材料|证照|图片|照片)/.test(t) ||
+    /下列(文件|材料|证照)/.test(t) ||
+    (t.includes("下列") && t.includes("所需")) ||
+    /上传指引|示意图|样例|四证|四类|四种证件|请传照片/.test(t) ||
+    (/材料清单/.test(t) && !/仍缺|仅缺/.test(t)) ||
+    /所需上传|须上传|应上传|请上传(的)?证照|证照示意|证照样例|证照类型|上传.*证照/.test(t) ||
+    /^所需/.test(t)
+  );
+}
+
+/** 是否应补全为四种证照（首次说明、或模型重复同一类、或总览标题漏写条目）。 */
 function shouldExpandToFourSamples(
   cardTitle: string | undefined,
   items: VisionUploadGuideItem[],
@@ -145,8 +167,12 @@ function shouldExpandToFourSamples(
   if (items.length >= 2 && uniq.size === 1) {
     return true;
   }
-  if (items.length === 0 || items.length >= 4) {
+  if (items.length >= 4) {
     return false;
+  }
+  /** 有总览类标题但 missing 为空：仍铺四宫格（模型漏写数组）。 */
+  if (items.length === 0) {
+    return titleImpliesFourSampleOnboarding(cardTitle);
   }
 
   /**
@@ -156,23 +182,25 @@ function shouldExpandToFourSamples(
   const looksLikeSingleGap =
     items.length === 1 &&
     /仍缺|仅缺|还需补充|尚缺|补传/.test(t) &&
-    !/下列|以下|所需证照|四种|四类|请上传以下|示意图|样例/.test(t);
+    !/下列|以下|所需证照|四种|四类|请上传以下|示意图|样例|所需上传|上传指引/.test(t);
   if (looksLikeSingleGap) {
     return false;
   }
 
   const howToInTitle =
     /如何使用|怎么用|使用说明|怎么上传|如何上传|初次|首次|新手指南/.test(t);
-  /** 与「请上传以下文件」等模型常见 card_title 对齐；/howTo/ 往往在 reply 里而不在标题中。 */
-  const listStyleOnboarding =
-    /请上传以下/.test(t) ||
-    /以下(文件|材料|证照|图片|照片)/.test(t) ||
-    /下列(文件|材料|证照)/.test(t) ||
-    (t.includes("下列") && t.includes("所需")) ||
-    /上传指引|示意图|样例|四证|四类|四种证件|请传照片/.test(t) ||
-    (/材料清单/.test(t) && !/仍缺|仅缺/.test(t));
+  const listStyleOnboarding = titleImpliesFourSampleOnboarding(cardTitle);
 
   if ((howToInTitle || listStyleOnboarding) && items.length < 4) {
+    return true;
+  }
+  /**
+   * 仅 1 条且为合法四 id 之一：多为「如何使用/所需上传」场景下模型漏写其余三项（标题未必含上述关键词）。
+   */
+  if (
+    items.length === 1 &&
+    [...uniq].every((id) => id in SAMPLE_IMAGE_PATHS)
+  ) {
     return true;
   }
   return false;
@@ -235,6 +263,12 @@ export function normalizeVisionUploadGuide(raw: unknown): VisionUploadGuide | un
   const o = raw as Record<string, unknown>;
   const rawMissing = o.missing_items;
   const rawSat = o.satisfied_labels;
+  const satisfied_labels = Array.isArray(rawSat)
+    ? rawSat
+        .filter((x): x is string => typeof x === "string" && x.trim() !== "")
+        .map((s) => s.trim())
+        .filter((s) => MATERIAL_TITLE_SET.has(s))
+    : [];
   const card_title =
     typeof o.card_title === "string" && o.card_title.trim() !== "" ? o.card_title.trim() : undefined;
   let missing_items: VisionUploadGuideItem[] = Array.isArray(rawMissing)
@@ -254,16 +288,14 @@ export function normalizeVisionUploadGuide(raw: unknown): VisionUploadGuide | un
     : [];
 
   missing_items = dedupeMissingBySampleId(missing_items);
-  if (shouldExpandToFourSamples(card_title, missing_items)) {
+  const blockOnboardingExpand =
+    satisfied_labels.length > 0 &&
+    missing_items.length > 0 &&
+    missing_items.length < 4;
+  if (!blockOnboardingExpand && shouldExpandToFourSamples(card_title, missing_items)) {
     missing_items = buildFourCanonicalMissing(missing_items);
   }
 
-  const satisfied_labels = Array.isArray(rawSat)
-    ? rawSat
-        .filter((x): x is string => typeof x === "string" && x.trim() !== "")
-        .map((s) => s.trim())
-        .filter((s) => MATERIAL_TITLE_SET.has(s))
-    : [];
   if (!card_title && missing_items.length === 0 && satisfied_labels.length === 0) {
     return undefined;
   }

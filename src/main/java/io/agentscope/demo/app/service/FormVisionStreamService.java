@@ -18,6 +18,7 @@ import io.agentscope.core.skill.SkillBox;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.demo.SessionIds;
 import io.agentscope.demo.app.agent.FormVisionFillSkillSupport;
+import io.agentscope.demo.app.upload.UploadMaterialCoverageStore;
 import io.agentscope.demo.app.web.dto.FormVisionExtraction;
 import java.io.IOException;
 import java.time.Duration;
@@ -52,12 +53,16 @@ public class FormVisionStreamService {
     private final JsonSession jsonSession;
     /** 视觉模型（qwen-vl-max 流式），与文本对话用的 chat Bean 分离注入。 */
     private final DashScopeChatModel formVisionDashScopeChatModel;
+    /** 根据上传文件名累计推断本会话已出现过的证照类型，供后续「还缺什么」文本对话使用。 */
+    private final UploadMaterialCoverageStore uploadMaterialCoverageStore;
 
     public FormVisionStreamService(
             JsonSession jsonSession,
-            @Qualifier("formVisionDashScopeChatModel") DashScopeChatModel formVisionDashScopeChatModel) {
+            @Qualifier("formVisionDashScopeChatModel") DashScopeChatModel formVisionDashScopeChatModel,
+            UploadMaterialCoverageStore uploadMaterialCoverageStore) {
         this.jsonSession = jsonSession;
         this.formVisionDashScopeChatModel = formVisionDashScopeChatModel;
+        this.uploadMaterialCoverageStore = uploadMaterialCoverageStore;
     }
 
     /**
@@ -129,6 +134,8 @@ public class FormVisionStreamService {
                     total,
                     totalImageBytes);
 
+            uploadMaterialCoverageStore.mergeFromHints(safeId, names);
+
             // 进入模型前再推一条：phase 从 load_image 切到 infer，前端可切换文案/样式
             sendJson(
                     emitter,
@@ -155,8 +162,9 @@ public class FormVisionStreamService {
                                             + " 张图片（文件名供参考："
                                             + String.join("、", names)
                                             + "）。\n"
-                                            + "请务必加载并遵循技能 **form_vision_fill** 中的字段键与歧义规则，"
-                                            + "综合全部图片抽取与企业登记表单相关的信息。\n"
+                                            + "技能 **form_vision_fill** 的完整规则已由应用注入本请求上下文；你必须严格按其"
+                                            + "「字段键（form_patch）」与歧义章节输出。**禁止**在思考过程或正文中声称无法加载、"
+                                            + "未读或未提供该技能文档。综合全部图片抽取与企业登记表单相关的信息。\n"
                                             + "**upload_guide 在本链路必须为 null**（本请求仅为影像分析，未包含「如何使用/缺件」类"
                                             + "文字询问；材料卡仅在文本对话命中相应意图时由其它路由生成）。\n"
                                             + "仅输出结构化结果通道要求的 JSON（form_patch / ambiguities / reply；upload_guide 为 null），"
@@ -190,6 +198,11 @@ public class FormVisionStreamService {
                                     "你是企业资质与工商信息录入助手。用户已上传影像：仅加载 **form_vision_fill** 做"
                                             + " form_patch / ambiguities / reply；**不要**加载 upload_guide_dialog，**upload_guide 恒为"
                                             + " null**。\n"
+                                            + "**form_vision_fill** 的全文已由运行时在模型上下文中提供；你已在同一请求内拥有该技能"
+                                            + "全部规则。**禁止**在思考过程（reasoning/thinking）、内部推理或对用户可见文本中声称"
+                                            + "「无法加载」「未提供文档」「只能猜字段名」等。`form_patch` 键名必须严格取自该技能"
+                                            + "已列出的 camelCase；两类许可证分别使用 `safety*` 与 `transport*` 前缀字段组，"
+                                            + "勿自造 issuingAuthority、issueDate、validityPeriodStart 等未在技能中出现的键。\n"
                                             + "若 reply 中须提及证照中文名，仅允许四种全称：营业执照、身份证人像面、道路危险货物"
                                             + "运输许可证、危险化学品经营许可证；禁止「如适用」式发散与括号后缀。\n"
                                             + "reply 禁止 Markdown 图片与任何 http(s) 占位链接。")

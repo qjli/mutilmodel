@@ -38,9 +38,12 @@ public final class FormVisionFillSkillSupport {
         return AgentSkill.builder()
                 .name("form_vision_fill")
                 .description(
-                        "Load when the user uploads business licenses or qualification scans and needs"
-                                + " structured form fields (enterprise profile / permits). "
-                                + "Defines canonical camelCase keys, date formats, and ambiguity rules.")
+                        "Full markdown is injected by the host on every vision/chat request that registers"
+                                + " this skill; the model must not claim the document is unavailable. Load when the"
+                                + " user uploads business licenses or qualification scans and needs structured form"
+                                + " fields (enterprise profile / permits). Defines canonical camelCase keys, date"
+                                + " formats, and ambiguity rules; use safety* vs transport* field groups for the two"
+                                + " permit types.")
                 .skillContent(md)
                 .build();
     }
