@@ -74,6 +74,8 @@ type FormValues = {
   registeredCapital?: string;
   companyFax?: string;
   learnChannel?: string;
+  /** 营业执照「法定代表人」证面姓名（与企业资质区块法人身份证可并存） */
+  legalRepresentative?: string;
   /** 企业资质信息 */
   unifiedSocialCreditCode?: string;
   qualificationIdDocType?: string;
@@ -1165,6 +1167,15 @@ export default function MultimodalConsole() {
                         rules={[{ required: true, message: "请输入公司简称" }]}
                       >
                         <Input placeholder="请输入公司简称" allowClear />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        label="法定代表人（工商证照）"
+                        name="legalRepresentative"
+                        tooltip="来自营业执照证面「法定代表人」；与下方资质证件号码（身份证人像面）可对应不同自然人"
+                      >
+                        <Input placeholder="可选，识别营业执照后回填" allowClear />
                       </Form.Item>
                     </Col>
                     <Col xs={24} md={12}>

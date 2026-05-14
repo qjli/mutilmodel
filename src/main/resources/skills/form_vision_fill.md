@@ -18,6 +18,7 @@
 `form_patch` 的键名必须使用 **camelCase**，与前端表单 `name` 一致，例如：
 
 - `companyName`, `companyShortName`, `formerName`
+- `legalRepresentative`：营业执照证面「法定代表人」姓名（与右侧「企业资质信息」中的证件号码字段**分工不同**：后者对应身份证人像面的公民身份号码）
 - `enterpriseNature`, `enterpriseType`, `businessScope`
 - `companyPhone`, `companyEmail`
 - `registrationDate`（ISO-8601 日期字符串，如 `2018-03-15`）
@@ -25,6 +26,7 @@
 - `registeredCapital`（字符串，单位万元，与表单一致）
 - `companyFax`, `learnChannel`
 - `unifiedSocialCreditCode`, `qualificationIdDocType`, `qualificationIdDocNumber`
+  - 身份证人像面：公民身份号码 → **`qualificationIdDocNumber`**；`qualificationIdDocType` 一般填「身份证」。**禁止**使用 `idCardName`、`idCardNumber`、`idNumber` 等未在表单 `name` 中定义的键。
 - **安全生产 / 危险品经营许可证等**（与表单「危险品经营许可证」区块一致）：
   - `safetyAdminLicenseName`：证照上的行政许可名称 / 证书名称（如「危险化学品经营许可证」）
   - `safetyLicenseNo`：证书编号 / 许可证编号
@@ -46,7 +48,7 @@
 
 右侧「企业基本信息」等区块中，多数字段在数据模型上为**单行单值**（例如一个企业只能对应一个 `companyName`、一个 `unifiedSocialCreditCode`）。
 
-当本轮影像中同时出现 **≥2 张营业执照（或同等效力的工商登记照）**，且证面分别记载 **不同经营主体**（企业名称或统一社会信用代码等明显指向两个及以上法人实体）时，凡下列 **camelCase 字段** 在证面之间存在 **互斥的多个明确取值**，一律视为存在歧义：
+当本轮影像中同时出现 **≥2 张营业执照（或同等效力的工商登记照）**，或**一张营业执照与至少一张行政许可证**且证面「名称 / 企业名称 / 业户名称」指向 **不同经营主体**（企业名称或统一社会信用代码等明显指向两个及以上法人实体）时，凡下列 **camelCase 字段** 在证面之间存在 **互斥的多个明确取值**，一律视为存在歧义：
 
 - `companyName`、`companyShortName`
 - `unifiedSocialCreditCode`
@@ -60,7 +62,7 @@
 
 1. 上述每个发生冲突的 `field_key`：**不得**在 `form_patch` 中出现该键（勿任选其一写入）。
 2. 在 `ambiguities` 中为每个冲突字段各建一条：
-  - `question_for_user`：中性说明原因，例如「上传了多张营业执照，分别对应不同企业名称，无法自动确定应填入表单的唯一主体」。  
+  - `question_for_user`：中性说明原因，例如「上传了多张证照（多张营业执照，或营业执照与行政许可证），分别对应不同企业名称，无法自动确定应填入表单的唯一主体」。  
   - `options`：**每个候选对应一张证照来源**，`label` 中写清区分依据（如「证照 A（正本）·企业名称：…」「证照 B（副本）·企业名称：…」），`suggested_value` 为选中后写入该 `field_key` 的字符串（与证面一致，勿编造）。  
   - `option_id`：简短唯一即可（如 `lic_a`、`lic_b` 或 `shaanxi`、`henan`）。
 3. `reply` 的【待确认 / 歧义】必须与 `ambiguities` **逐条一致**；**禁止**在【已抽取字段】中把两套主体的同一语义字段并列列出却又不给 `ambiguities`（即禁止「叙述上两套、结构上无歧义」）。
@@ -68,7 +70,18 @@
 **非冲突情形（可不造歧义）**
 
 - 多张图实为**同一企业**的重复角度、同一证正副本信息完全一致。  
-- 一张为营业执照、另一张为**许可证**且字段分属不同区块（如 `companyName` 与 `safetyLicenseNo`）无键冲突。
+- 一张为营业执照、另一张为**许可证**且证面「企业名称 / 业户名称 / 名称」与营业执照「名称」**指向同一经营主体**（互为全称/简称包含、或明显同一法人实体），且统一社会信用代码**不互斥**时：`companyName` 与 `safety*` / `transport*` 分栏填写，**不**视为 `companyName` 冲突。  
+- **若营业执照「名称」与危险化学品经营许可证 / 道路危险货物运输许可证上的「企业名称」「业户名称」等指向明显不同主体**（典型如「河南安彩能源股份有限公司」与「山东某某化工有限公司」互不包含、非简称关系），则与「多张营业执照多主体」**同等处理**：**必须**对 `companyName` 建 `ambiguities`，**不得**将任一证面名称单独写入 `form_patch.companyName`；若同时出现**两枚及以上互斥**的统一社会信用代码（含掩码与完整号码混排且去掩码后仍不一致），对 `unifiedSocialCreditCode` **同样必须** `ambiguities` 并自 `form_patch` 省略该键。应用宿主会在归一化后做一次结构化冲突复检并可能**追加**歧义项（与模型输出合并）。
+
+### 营业执照与行政许可的「企业名称 / 业户名称」交叉多主体（强制歧义）
+
+当本轮影像中**同时存在**营业执照与至少一类行政许可（危化经营、道路危运等），且从证面可读文本可得到**至少两个**不同的企业/业户名称候选，且二者**互不包含、非明显简称关系**（与上文「非冲突情形」第三款相反）时：
+
+1. **`companyName` 与 `companyShortName`**：一律**不得**写入 `form_patch`；必须在 `ambiguities` 中为 `companyName`（必要时一并说明 `companyShortName` 依赖用户先选主体）给出与证类来源对应的候选（`label` 中写清来自营业执照 vs 哪类许可证）。  
+2. **`unifiedSocialCreditCode`**：若证面出现**互斥**的多个代码串，同样**不得**写入 `form_patch`，必须 `ambiguities`。  
+3. `reply`【待确认 / 歧义】必须与上述结构一致，**禁止**在【已抽取字段】中假装已唯一确定主体。
+
+> **宿主复检**：`FormVisionMultiEntityConflictDetector` 在 `FormVisionPatchNormalizer` 之后运行，会据原始 `form_patch` 键名及归一化后的 `transportAdminLicenseName` / `safetyAdminLicenseName` 内嵌「业户名称：」「企业名称：」片段做互斥检测；与模型结论冲突时以「用户点选」为准，故模型仍应按上款主动输出歧义，宿主检测为兜底。
 
 ## 危险品经营许可证 / 安全生产类证照：发证机构与法人代表
 

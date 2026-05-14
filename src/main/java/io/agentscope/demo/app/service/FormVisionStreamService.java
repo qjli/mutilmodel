@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -302,6 +303,13 @@ public class FormVisionStreamService {
 
             // 视觉链路不加载 upload_guide_dialog：丢弃模型偶发的 upload_guide，避免与表单抽取技能交叉。
             extraction.uploadGuide = null;
+
+            LinkedHashMap<String, Object> rawFormPatchSnapshot =
+                    extraction.formPatch == null
+                            ? new LinkedHashMap<>()
+                            : new LinkedHashMap<>(extraction.formPatch);
+            extraction.formPatch = FormVisionPatchNormalizer.normalize(rawFormPatchSnapshot);
+            FormVisionMultiEntityConflictDetector.apply(extraction, rawFormPatchSnapshot);
 
             int patchKeys = extraction.formPatch == null ? 0 : extraction.formPatch.size();
             int ambN = extraction.ambiguities == null ? 0 : extraction.ambiguities.size();
