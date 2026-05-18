@@ -33,6 +33,14 @@ class FormVisionPatchNormalizerTest {
     }
 
     @Test
+    void normalizesChineseRegistrationDateToIso() {
+        LinkedHashMap<String, Object> raw = new LinkedHashMap<>();
+        raw.put("establishmentDate", "2003年04月18日");
+        var out = FormVisionPatchNormalizer.normalize(raw);
+        assertThat(out).containsEntry("registrationDate", "2003-04-18");
+    }
+
+    @Test
     void normalizesBatchFourPermitPrefixes() {
         LinkedHashMap<String, Object> raw = new LinkedHashMap<>();
         raw.put("businessLicenseUnifiedSocialCreditCode", "914105007492219803");

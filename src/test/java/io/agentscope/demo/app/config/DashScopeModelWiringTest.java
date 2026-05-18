@@ -29,14 +29,14 @@ class DashScopeModelWiringTest {
 
     @Test
     void springWiresExpectedDashScopeBeans() {
-        assertThat(formVisionModel.getModelName()).isEqualTo("qwen-vl-max");
+        assertThat(formVisionModel.getModelName()).isEqualTo("qwen3-vl-plus");
         assertThat(chatModel.getModelName()).isEqualTo("qwen-max");
     }
 
-    /** 不发起 HTTP：仅确认关闭思考时本地构建不抛异常（与 qwen-vl-max 百炼约束一致）。 */
+    /** 不发起 HTTP：仅确认关闭思考时本地构建不抛异常。 */
     @Test
     void visionModelWithThinkingOffBuilds() {
         DashScopeChatModel m = DashScopeSupport.visionModel("unit-test-key-not-sent", true, false);
-        assertThat(m.getModelName()).isEqualTo("qwen-vl-max");
+        assertThat(m.getModelName()).isEqualTo("qwen3-vl-plus");
     }
 }

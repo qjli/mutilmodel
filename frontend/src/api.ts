@@ -302,6 +302,120 @@ export function normalizeVisionUploadGuide(raw: unknown): VisionUploadGuide | un
   return { card_title, satisfied_labels, missing_items };
 }
 
+/** 须与后端 {@code FormVisionMultiEntityConflictDetector} 中 {@code ENTERPRISE_BASIC_KEYS} 顺序与拼写一致。 */
+export const VISION_ENTERPRISE_FIELD_KEYS = [
+  "companyName",
+  "companyShortName",
+  "formerName",
+  "unifiedSocialCreditCode",
+  "enterpriseNature",
+  "enterpriseType",
+  "registeredRegion",
+  "registeredAddressDetail",
+  "actualLocation",
+  "registeredZip",
+  "registrationDate",
+  "registeredCapital",
+  "businessScope",
+  "legalRepresentative",
+] as const;
+
+/** 须与后端 {@code FormVisionMultiEntityConflictDetector.TRANSPORT_PERMIT_KEYS} 一致。 */
+export const VISION_TRANSPORT_FIELD_KEYS = [
+  "transportAdminLicenseName",
+  "transportLicenseNo",
+  "transportLicenseValidityMode",
+  "transportLicenseValidityRange",
+  "transportIssuingAuthority",
+  "transportLegalRepresentative",
+] as const;
+
+/** 须与后端 {@code FormVisionMultiEntityConflictDetector.SAFETY_PERMIT_KEYS} 一致。 */
+export const VISION_SAFETY_FIELD_KEYS = [
+  "safetyAdminLicenseName",
+  "safetyLicenseNo",
+  "safetyLicenseValidityMode",
+  "safetyLicenseValidityRange",
+  "safetyIssuingAuthority",
+  "safetyLegalRepresentative",
+] as const;
+
+export type VisionResultHostFlags = {
+  multi_enterprise_conflict_applied?: boolean;
+  multi_transport_conflict_applied?: boolean;
+  multi_safety_conflict_applied?: boolean;
+};
+
+/**
+ * 服务端已从 {@code form_patch} 剔除整族键时，前端仍保留旧 {@code Form} 状态；对「未出现在 patch 中的族内键」写入
+ * {@code undefined} 以清空控件，避免与「需您确认」互斥。
+ */
+export function augmentVisionFormPatchForHostClears(
+  patch: Record<string, unknown>,
+  flags: VisionResultHostFlags,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...patch };
+  const clearMissing = (keys: readonly string[]) => {
+    for (const k of keys) {
+      if (!Object.prototype.hasOwnProperty.call(out, k)) {
+        out[k] = undefined;
+      }
+    }
+  };
+  if (flags.multi_enterprise_conflict_applied) {
+    clearMissing(VISION_ENTERPRISE_FIELD_KEYS);
+  }
+  if (flags.multi_transport_conflict_applied) {
+    clearMissing(VISION_TRANSPORT_FIELD_KEYS);
+  }
+  if (flags.multi_safety_conflict_applied) {
+    clearMissing(VISION_SAFETY_FIELD_KEYS);
+  }
+  return out;
+}
+
+/** 防止模型/反序列化异常导致 {@code options} 缺失等运行时崩溃。 */
+export function sanitizeVisionAmbiguities(raw: unknown): VisionAmbiguousField[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: VisionAmbiguousField[] = [];
+  for (const item of raw) {
+    if (item == null || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const o = item as Record<string, unknown>;
+    const fk = typeof o.field_key === "string" ? o.field_key.trim() : "";
+    const q = typeof o.question_for_user === "string" ? o.question_for_user : "";
+    const rawOpts = o.options;
+    if (!Array.isArray(rawOpts) || rawOpts.length === 0) {
+      continue;
+    }
+    const options: VisionAmbiguousOption[] = [];
+    for (const op of rawOpts) {
+      if (op == null || typeof op !== "object" || Array.isArray(op)) {
+        continue;
+      }
+      const p = op as Record<string, unknown>;
+      options.push({
+        option_id: String(p.option_id ?? ""),
+        label: typeof p.label === "string" ? p.label : "",
+        suggested_value:
+          typeof p.suggested_value === "string"
+            ? p.suggested_value
+            : p.suggested_value != null && p.suggested_value !== undefined
+              ? String(p.suggested_value)
+              : "",
+      });
+    }
+    if (!fk || options.length === 0) {
+      continue;
+    }
+    out.push({ field_key: fk, question_for_user: q, options });
+  }
+  return out;
+}
+
 export type VisionSseEvent =
   | {
       type: "progress";
@@ -319,7 +433,7 @@ export type VisionSseEvent =
       formPatch: Record<string, unknown>;
       ambiguities: VisionAmbiguousField[];
       uploadGuide?: VisionUploadGuide | null;
-    }
+    } & VisionResultHostFlags
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -349,7 +463,11 @@ async function consumeSseJson(
         if (!json) {
           continue;
         }
-        onEvent(JSON.parse(json) as VisionSseEvent);
+        try {
+          onEvent(JSON.parse(json) as VisionSseEvent);
+        } catch (e) {
+          console.error("[vision-sse] bad json frame", e, json.slice(0, 240));
+        }
       }
     }
   }

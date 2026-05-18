@@ -329,6 +329,9 @@ public class FormVisionStreamService {
             resultPayload.put(
                     "ambiguities", extraction.ambiguities != null ? extraction.ambiguities : List.of());
             resultPayload.put("uploadGuide", extraction.uploadGuide);
+            resultPayload.put("multi_enterprise_conflict_applied", extraction.multiEnterpriseConflictApplied);
+            resultPayload.put("multi_transport_conflict_applied", extraction.multiTransportConflictApplied);
+            resultPayload.put("multi_safety_conflict_applied", extraction.multiSafetyConflictApplied);
             sendJson(emitter, resultPayload);
 
             // 把本轮 Agent 状态写入 session 目录，供后续文本对话或其它请求复用

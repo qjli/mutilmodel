@@ -40,11 +40,13 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  augmentVisionFormPatchForHostClears,
   normalizeVisionUploadGuide,
   postJson,
   postVisionFormStream,
   resolveSampleImageUrl,
   sanitizeAssistantReplyDisplay,
+  sanitizeVisionAmbiguities,
   type VisionAmbiguousField,
   type VisionUploadGuide,
 } from "./api";
@@ -57,6 +59,7 @@ type ChatResponse = {
   uploadGuide?: VisionUploadGuide | null;
 };
 
+/** 与后端 `FormVisionPatchNormalizer.CANONICAL_KEYS` / 工商整族键一致；未在此声明的键勿用于 `Form.Item name`。 */
 type FormValues = {
   companyName: string;
   companyShortName: string;
@@ -109,6 +112,26 @@ const LEGACY_SINGLE_DATE_TO_RANGE: Record<string, string> = {
   transportLicenseValidityDate: "transportLicenseValidityRange",
 };
 
+/** 证面中文日期与 ISO；避免 Invalid Dayjs 导致 DatePicker 渲染崩溃。 */
+function registrationDateStringToDayjs(s: string): dayjs.Dayjs | null {
+  const t = s.trim();
+  if (!t) {
+    return null;
+  }
+  let d = dayjs(t);
+  if (d.isValid()) {
+    return d;
+  }
+  const cn = /^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?$/.exec(t);
+  if (cn) {
+    d = dayjs(`${cn[1]}-${cn[2].padStart(2, "0")}-${cn[3].padStart(2, "0")}`);
+    if (d.isValid()) {
+      return d;
+    }
+  }
+  return null;
+}
+
 type VisionJobState = {
   status: "running" | "done" | "error";
   phase: string;
@@ -144,7 +167,12 @@ function normalizeVisionFormPatch(patch: Record<string, unknown>): Partial<FormV
   const out = { ...patch } as Record<string, unknown>;
   const reg = out.registrationDate;
   if (typeof reg === "string" && reg) {
-    out.registrationDate = dayjs(reg);
+    const d = registrationDateStringToDayjs(reg);
+    if (d) {
+      out.registrationDate = d;
+    } else {
+      delete out.registrationDate;
+    }
   }
   for (const key of FORM_RANGE_KEYS) {
     const val = out[key];
@@ -164,22 +192,18 @@ function normalizeVisionFormPatch(patch: Record<string, unknown>): Partial<FormV
   return out as Partial<FormValues>;
 }
 
-/** 将模型/后端可能返回的 field_key 转为与 Form.Item name 一致的 camelCase，并映射常见别名。 */
+/** 将模型/后端可能返回的 field_key 转为与 Form.Item name 一致的 camelCase（与后端 camelCase 键一致）。 */
 function normalizeVisionAmbiguityFieldKey(raw: string): string {
   let k = (raw ?? "").trim();
   if (!k) return k;
   if (k.includes("_")) {
     k = k.replace(/_([a-zA-Z0-9])/g, (_, ch: string) => ch.toUpperCase());
   }
-  const lower = k.toLowerCase();
-  const aliases: Record<string, string> = {
-    legalrepresentative: "safetyLegalRepresentative",
-    法定代表人: "safetyLegalRepresentative",
-    法人: "safetyLegalRepresentative",
-    负责人: "safetyLegalRepresentative",
-  };
-  return aliases[lower] ?? k;
+  return k;
 }
+
+/** 与后端 FormVisionMultiEntityConflictDetector.CLEAR_FIELD_SENTINEL 一致。 */
+const VISION_CLEAR_FIELD_SENTINEL = "__CLEAR_FIELD__";
 
 function resolveAmbiguityOptionValue(opt: VisionAmbiguousField["options"][number]): string {
   const v = opt.suggested_value;
@@ -200,15 +224,22 @@ function patchFromAmbiguityChoice(
   formKey: string,
   opt: VisionAmbiguousField["options"][number],
 ): Partial<FormValues> | null {
-  const raw = resolveAmbiguityOptionValue(opt);
+  const raw = opt.suggested_value;
+  if (typeof raw === "string" && raw === VISION_CLEAR_FIELD_SENTINEL) {
+    if (formKey === "registrationDate") {
+      return { registrationDate: undefined } as Partial<FormValues>;
+    }
+    return { [formKey]: "" } as Partial<FormValues>;
+  }
+  const resolved = resolveAmbiguityOptionValue(opt);
   if (formKey === "registrationDate") {
-    const iso = extractIsoDateFromAmbiguityText(raw);
+    const iso = extractIsoDateFromAmbiguityText(resolved);
     if (!iso) {
       return null;
     }
     return normalizeVisionFormPatch({ registrationDate: iso }) as Partial<FormValues>;
   }
-  return { [formKey]: raw } as Partial<FormValues>;
+  return { [formKey]: resolved } as Partial<FormValues>;
 }
 
 /** 同一语义字段合并为一组选项，避免重复 key 与 field_key 与表单 name 不一致。 */
@@ -480,7 +511,12 @@ export default function MultimodalConsole() {
       }
       const reg = parsed.registrationDate;
       if (typeof reg === "string" && reg) {
-        parsed.registrationDate = dayjs(reg);
+        const d = registrationDateStringToDayjs(reg);
+        if (d) {
+          parsed.registrationDate = d;
+        } else {
+          delete parsed.registrationDate;
+        }
       }
       for (const key of FORM_RANGE_KEYS) {
         const val = parsed[key];
@@ -599,10 +635,17 @@ export default function MultimodalConsole() {
         } else if (ev.type === "assistant_text") {
           patchVision((v) => ({ ...v, assistantLog: v.assistantLog + ev.delta }));
         } else if (ev.type === "result") {
-          const patch = normalizeVisionFormPatch(ev.formPatch ?? {});
+          const mergedPatch = augmentVisionFormPatchForHostClears(ev.formPatch ?? {}, {
+            multi_enterprise_conflict_applied: ev.multi_enterprise_conflict_applied,
+            multi_transport_conflict_applied: ev.multi_transport_conflict_applied,
+            multi_safety_conflict_applied: ev.multi_safety_conflict_applied,
+          });
+          const patch = normalizeVisionFormPatch(mergedPatch);
           form.setFieldsValue(patch);
           persistForm();
-          setAmbiguities(normalizeVisionAmbiguities(ev.ambiguities ?? []));
+          setAmbiguities(
+            normalizeVisionAmbiguities(sanitizeVisionAmbiguities(ev.ambiguities)),
+          );
           const uploadGuide = normalizeVisionUploadGuide(ev.uploadGuide);
           setMessages((m) =>
             m.map((row) =>
@@ -1088,8 +1131,10 @@ export default function MultimodalConsole() {
                     message="需您确认的内容（来自影像识别）"
                     description={
                       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-                        {ambiguities.map((amb) => (
-                          <div key={amb.field_key}>
+                        {ambiguities.map((amb, ambIdx) => (
+                          <div
+                            key={`${normalizeVisionAmbiguityFieldKey(amb.field_key)}-${ambIdx}`}
+                          >
                             <Typography.Paragraph style={{ marginBottom: 8 }}>
                               {amb.question_for_user}
                             </Typography.Paragraph>
@@ -1097,7 +1142,7 @@ export default function MultimodalConsole() {
                               onChange={(e) => {
                                 const formKey = normalizeVisionAmbiguityFieldKey(amb.field_key);
                                 const picked = String(e.target.value);
-                                const opt = amb.options.find(
+                                const opt = (amb.options ?? []).find(
                                   (o) => String(o.option_id) === picked,
                                 );
                                 if (opt) {
@@ -1121,8 +1166,8 @@ export default function MultimodalConsole() {
                               }}
                             >
                               <Space direction="vertical">
-                                {amb.options.map((o) => (
-                                  <Radio key={String(o.option_id)} value={o.option_id}>
+                                {(amb.options ?? []).map((o) => (
+                                  <Radio key={String(o.option_id)} value={String(o.option_id)}>
                                     {o.label}
                                   </Radio>
                                 ))}
@@ -1245,6 +1290,56 @@ export default function MultimodalConsole() {
                         rules={[{ required: true, message: "请输入邮编" }]}
                       >
                         <Input placeholder="6 位邮编" allowClear maxLength={6} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={24}>
+                      <Form.Item label="注册地址（住所）" name="registeredAddressDetail">
+                        <Input.TextArea
+                          rows={2}
+                          placeholder="与营业执照「住所」一致，可选"
+                          allowClear
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col span={24}>
+                      <Form.Item label="经营范围" name="businessScope">
+                        <Input.TextArea
+                          rows={3}
+                          placeholder="与证照证面一致，可选"
+                          allowClear
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item label="注册地行政区划" name="registeredRegion">
+                        <Input placeholder="省 / 市 / 区县，可选" allowClear />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item label="实际经营地址" name="actualLocation">
+                        <Input placeholder="与证照不一致时填写，可选" allowClear />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Row gutter={24}>
+                    <Col xs={24} md={12}>
+                      <Form.Item label="公司电话" name="companyPhone">
+                        <Input placeholder="可选" allowClear />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item label="公司邮箱" name="companyEmail">
+                        <Input placeholder="可选" allowClear />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item label="公司传真" name="companyFax">
+                        <Input placeholder="可选" allowClear />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item label="获知渠道" name="learnChannel">
+                        <Input placeholder="可选" allowClear />
                       </Form.Item>
                     </Col>
                   </Row>

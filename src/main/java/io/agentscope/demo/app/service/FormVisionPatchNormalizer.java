@@ -14,6 +14,11 @@ import java.util.regex.Pattern;
  *
  * <p>模型在单图、多图、思考链开启与否等情况下输出键名不稳定；本类在 SSE 下发前做确定性修正，避免 Ant Design Form
  * {@code setFieldsValue} 静默丢弃未知键。
+ *
+ * <p><b>与前端同步：</b>{@code frontend/src/App.tsx} 中各 {@code Form.Item name} 及 {@code frontend/src/api.ts} 中
+ * {@code VISION_ENTERPRISE_FIELD_KEYS}、{@code VISION_TRANSPORT_FIELD_KEYS}、{@code VISION_SAFETY_FIELD_KEYS} 须与本类
+ * {@link #CANONICAL_KEYS} 及 {@link io.agentscope.demo.app.service.FormVisionMultiEntityConflictDetector} 族键保持一致（拼写、
+ * camelCase）。
  */
 public final class FormVisionPatchNormalizer {
 
@@ -56,6 +61,9 @@ public final class FormVisionPatchNormalizer {
     private static final Map<String, String> LOWER_KEY_TO_CANONICAL = new HashMap<>();
 
     private static final Pattern ISO_DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}");
+    /** 证面常见「2003年04月18日」；归一化为 ISO 供前端 DatePicker（dayjs）稳定解析。 */
+    private static final Pattern CHINESE_CALENDAR_DATE =
+            Pattern.compile("(\\d{4})\\s*年\\s*(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*日?");
 
     static {
         // 营业执照 / 工商（单图常见别名）
@@ -207,7 +215,31 @@ public final class FormVisionPatchNormalizer {
         if (m.find()) {
             return m.group();
         }
-        return s;
+        String cnIso = registrationDateToIsoOrNull(s);
+        return cnIso != null ? cnIso : s;
+    }
+
+    /** 将成立日期 / 注册日期类字符串转为 {@code yyyy-MM-dd}；无法识别时返回 {@code null}（丢弃该键）。 */
+    static String registrationDateToIsoOrNull(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String t = raw.trim();
+        if (t.isEmpty()) {
+            return null;
+        }
+        var isoHead = ISO_DATE.matcher(t);
+        if (isoHead.find()) {
+            return isoHead.group();
+        }
+        var cn = CHINESE_CALENDAR_DATE.matcher(t);
+        if (cn.find()) {
+            int y = Integer.parseInt(cn.group(1));
+            int mo = Integer.parseInt(cn.group(2));
+            int d = Integer.parseInt(cn.group(3));
+            return String.format(Locale.ROOT, "%04d-%02d-%02d", y, mo, d);
+        }
+        return null;
     }
 
     private static String canonicalKey(String rawKey) {
@@ -273,7 +305,13 @@ public final class FormVisionPatchNormalizer {
         }
         if (v instanceof String s) {
             String t = s.trim();
-            return t.isEmpty() ? null : t;
+            if (t.isEmpty()) {
+                return null;
+            }
+            if ("registrationDate".equals(canon)) {
+                return registrationDateToIsoOrNull(t);
+            }
+            return t;
         }
         if (("transportLicenseValidityRange".equals(canon) || "safetyLicenseValidityRange".equals(canon))
                 && v instanceof List<?> list

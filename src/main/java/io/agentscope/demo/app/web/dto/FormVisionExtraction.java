@@ -2,6 +2,7 @@ package io.agentscope.demo.app.web.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,7 +21,7 @@ public class FormVisionExtraction {
 
     /** 需用户在表单侧点选确认的字段；空列表表示无歧义。 */
     @JsonProperty("ambiguities")
-    public List<AmbiguousFieldDto> ambiguities = List.of();
+    public List<AmbiguousFieldDto> ambiguities = new ArrayList<>();
 
     /** 简短中文总结，展示在对话气泡主文案。 */
     @JsonProperty("reply")
@@ -31,6 +32,18 @@ public class FormVisionExtraction {
      */
     @JsonProperty("upload_guide")
     public UploadGuideDto uploadGuide;
+
+    /**
+     * 宿主已对多主体工商整族从 {@link #formPatch} 剔除；前端须同步清空表单中对应旧值，避免与「需您确认」不一致。
+     */
+    @JsonProperty("multi_enterprise_conflict_applied")
+    public boolean multiEnterpriseConflictApplied;
+
+    @JsonProperty("multi_transport_conflict_applied")
+    public boolean multiTransportConflictApplied;
+
+    @JsonProperty("multi_safety_conflict_applied")
+    public boolean multiSafetyConflictApplied;
 
     public FormVisionExtraction() {}
 }

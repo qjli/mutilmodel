@@ -29,25 +29,22 @@ public class DashScopeModelConfig {
     }
 
     /**
-     * 多图表单识别：{@code qwen-vl-max}，流式，供 ReActAgent 流事件推送前端。
+     * 多图表单识别：默认 {@link DashScopeSupport#visionModel} 中的 {@code qwen3-vl-plus}，流式，供 ReActAgent
+     * 流事件推送前端。
      *
-     * <p><b>说明：</b>当前 DashScope 上 {@code qwen-vl-max} 与 extended thinking 不兼容：开启思考并传入正的
-     * {@code thinking_budget} 会稳定返回 400 {@code thinking_budget ... not greater than 0}（即该模型不允许正
-     * budget）。因此默认 {@code enableThinking=false}；流式中的推理片段依赖模型侧其它输出，而非 extended
-     * thinking。
-     *
-     * <p>若将来更换为支持思考的视觉模型，可再通过配置打开 {@link DashScopeProperties#isVisionEnableThinking()}。
+     * <p><b>说明：</b>部分视觉模型与 extended thinking / {@code thinking_budget} 组合不兼容时会返回 400；请按
+     * 百炼文档核对当前模型后再打开 {@link DashScopeProperties#isVisionEnableThinking()}。
      */
     @Bean(name = "formVisionDashScopeChatModel")
     public DashScopeChatModel formVisionDashScopeChatModel(DashScopeProperties properties) {
         if (properties.isVisionEnableThinking()) {
             log.info(
-                    "[dashscope] vision bean model=qwen-vl-max stream=true enableThinking=true thinkingBudget={}",
+                    "[dashscope] vision bean model=qwen3-vl-plus stream=true enableThinking=true thinkingBudget={}",
                     properties.getVisionThinkingBudget());
             return DashScopeSupport.visionModel(
                     properties.getApiKey(), true, true, properties.getVisionThinkingBudget());
         }
-        log.info("[dashscope] vision bean model=qwen-vl-max stream=true enableThinking=false");
+        log.info("[dashscope] vision bean model=qwen3-vl-plus stream=true enableThinking=false");
         return DashScopeSupport.visionModel(properties.getApiKey(), true, false);
     }
 }
