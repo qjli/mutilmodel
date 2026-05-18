@@ -18,6 +18,7 @@
 - [HTTP API](#http-api)
 - [多图视觉 SSE 协议](#多图视觉-sse-协议)
 - [Agent、技能与业务规则](#agent技能与业务规则)
+- [AgentScope 核心类：生命周期与取舍](#agentscope-核心类生命周期与取舍)
 - [视觉结果后处理](#视觉结果后处理)
 - [材料四类与样图资源](#材料四类与样图资源)
 - [前端要点](#前端要点)
@@ -63,7 +64,7 @@ flowchart TB
   subgraph Agent["AgentScope 运行时"]
     JA["JsonSession\n会话目录读写"]
     AGc["ReActAgent · 文本\nqwen-max"]
-    AGv["ReActAgent · 视觉\nqwen-vl-max 流式"]
+    AGv["ReActAgent · 视觉\nqwen3-vl-plus 流式"]
     SBc["SkillBox\nform_vision_fill\n± upload_guide_dialog"]
     SBv["SkillBox\n仅 form_vision_fill"]
     AGc --> SBc
@@ -74,7 +75,7 @@ flowchart TB
 
   subgraph Cloud["阿里云 DashScope"]
     DS1["qwen-max"]
-    DS2["qwen-vl-max"]
+    DS2["qwen3-vl-plus"]
   end
 
   subgraph Disk["会话根 agentscope.session-root"]
@@ -173,7 +174,7 @@ flowchart LR
 | **JDK** | 17（`pom.xml` → `java.version`） |
 | **Spring Boot** | 3.3.6 |
 | **AgentScope Java** | `agentscope` 及相关扩展 `1.0.12`（见 `pom.xml`） |
-| **DashScope** | 文本模型 **`qwen-max`**（非流式）；视觉 **`qwen-vl-max`**（流式），见 `DashScopeModelConfig` |
+| **DashScope** | 文本模型 **`qwen-max`**（非流式）；视觉 **`qwen3-vl-plus`**（流式），见 `DashScopeModelConfig` |
 | **前端** | React 18、TypeScript 5.6、Vite 6、Ant Design 5；开发端口 **5173**，构建产物输出到 `src/main/resources/static/` |
 | **Node（可选）** | `frontend-maven-plugin` 使用 Node **v20.18.0** / npm **10.8.2**（启用 `frontend` profile 时） |
 
@@ -347,7 +348,8 @@ mvn -q -Pfrontend spring-boot:run
 ### 共同基础
 
 - **`ReActAgent`** + **`SkillBox`** 注册 classpath 技能；结构化输出类型由路由区分（文本：`ChatFormAssistantResult`；视觉：`FormVisionExtraction`）。
-- **`JsonSession`**：`agent.loadIfExists` / `saveTo`，目录为 `{sessionRoot}/{sessionId}/`。
+- **`JsonSession`**：`agent.loadIfExists` / `saveTo`，目录为 `{sessionRoot}/{sessionId}/`。  
+- 各核心类的**是否单例、为何这样拆、优缺点**见下节 **[AgentScope 核心类：生命周期与取舍](#agentscope-核心类生命周期与取舍)**。
 
 ### 技能一：`form_vision_fill`（`src/main/resources/skills/form_vision_fill.md`）
 
@@ -377,6 +379,142 @@ mvn -q -Pfrontend spring-boot:run
 
 - 每张图读完并取原始文件名列表后，调用 **`uploadMaterialCoverageStore.mergeFromHints(safeId, names)`**。
 - **`MaterialFilenameInference`** 从文件名推断四类 **`MaterialSampleIds`**，合并写入会话目录下 **`upload_material_coverage.json`**（与图像识别结果独立，仅作「是否上传过某类文件名」的弱信号）。
+
+---
+
+## AgentScope 核心类：生命周期与取舍
+
+本节说明 **Spring Web 主路径**（`DemoChatService`、`FormVisionStreamService`）如何装配 AgentScope；**CLI 示例**（`src/main/java/io/agentscope/demo/demos/*`）多为 `main` 里临时 `new`，不经过 Spring Bean，但类名与用法一致。
+
+### 总体策略（三层）
+
+```mermaid
+flowchart LR
+  subgraph Singleton["Spring 单例（进程级复用）"]
+    M1["chatDashScopeChatModel\nqwen-max · 非流式"]
+    M2["formVisionDashScopeChatModel\nqwen3-vl-plus · 流式"]
+    JS["JsonSession\n会话根目录"]
+  end
+
+  subgraph PerRequest["每请求 / 每轮新建"]
+    AG["ReActAgent"]
+    MEM["InMemoryMemory"]
+    TK["Toolkit"]
+    SB["SkillBox + AgentSkill"]
+    SO["StreamOptions（仅视觉）"]
+  end
+
+  subgraph Ephemeral["瞬时对象"]
+    MSG["Msg / TextBlock / ImageBlock\nThinkingBlock 等"]
+  end
+
+  M1 --> AG
+  M2 --> AG
+  JS -->|loadIfExists / saveTo| AG
+  AG --> MEM
+  AG --> TK
+  TK --> SB
+  AG --> MSG
+```
+
+| 层次 | 含义 | 本项目做法 |
+|------|------|------------|
+| **基础设施单例** | 模型客户端、磁盘会话根 | `DashScopeChatModel` ×2、`JsonSession` 各 1 个 Spring Bean |
+| **请求级 Agent** | 一轮 HTTP/SSE 对应一次推理上下文 | 每次 `chat` / `runAnalysis` **新建** `ReActAgent` + `InMemoryMemory` + `SkillBox` |
+| **跨请求状态** | 同一 `sessionId` 的多轮记忆 | 不靠长驻 Agent，靠 **`JsonSession` 落盘** + `loadIfExists` / `saveTo` |
+
+### 核心类对照表
+
+| AgentScope 类 | 主路径使用位置 | 是否单例 | 生命周期 / 说明 |
+|---------------|----------------|----------|------------------|
+| **`DashScopeChatModel`** | `DashScopeModelConfig` → 注入 `DemoChatService` / `FormVisionStreamService` | **是**（2 个 Bean） | `chatDashScopeChatModel`：`qwen-max`、`stream=false`；`formVisionDashScopeChatModel`：`qwen3-vl-plus`、`stream=true`。构建时内嵌 `DashScopeChatFormatter`、`GenerateOptions`（视觉开思考时带 `thinkingBudget`）。 |
+| **`DashScopeChatFormatter`** | `DashScopeSupport` 构建 Model 时 | 随 Model **单例** | 不单独注册 Bean；与对应 Model 绑定，保证请求/响应格式一致。 |
+| **`GenerateOptions`** | `DashScopeSupport.visionModel(...)` | 随视觉 Model **单例** | 仅在 `vision-enable-thinking=true` 时设置 `thinkingBudget`；文本 Model 使用空 options。 |
+| **`JsonSession`** | `AgentscopeSessionConfig` Bean；两 Service 注入 | **是** | 指向 `agentscope.session-root`（默认 `data/agentscope-sessions`）。**无状态存储器**：按 `sessionId` 子目录读写，线程安全由「每请求独立 Agent + 串行 load/save」保证。 |
+| **`ReActAgent`** | 每轮 `DemoChatService#chat`、`FormVisionStreamService#runAnalysis` | **否** | `ReActAgent.builder()...build()`；文本 `maxIters=8`，视觉 `maxIters=12`；`structuredOutputReminder(PROMPT)`。 |
+| **`InMemoryMemory`** | 同上，挂到 Agent | **否** | 每轮 **全新** 内存；历史来自 **`loadIfExists(jsonSession)`** 恢复的 Agent 状态，而非复用上一个 Java 堆里的 Memory 实例。 |
+| **`Toolkit`** | 构建 `SkillBox` 前 `new Toolkit()` | **否** | 每轮新建；当前技能以 Markdown 注入为主，工具调用面较窄。 |
+| **`SkillBox`** | 注册 `FormVisionFillSkillSupport.load()`；文本命中意图时再注册 `UploadGuideDialogSkillSupport` | **否** | 每轮按路由注册不同技能集合；视觉链路**仅** `form_vision_fill`。 |
+| **`AgentSkill`** | `*SkillSupport.load()` 读 classpath `skills/*.md` | **否**（对象）/ **是**（内容） | 每次 `load()` 新建 `AgentSkill` 实例，正文来自静态资源；未做跨请求缓存，换技能组合时无脏状态。 |
+| **`Msg`** | `Msg.builder()` 构造用户/助手消息 | **否** | 文本：单 `TextBlock`；视觉：说明 `TextBlock` + 多 `ImageBlock`（`Base64Source`）。 |
+| **`TextBlock` / `ImageBlock` / `ThinkingBlock` / `Base64Source`** | 组装 `Msg`；SSE 从 `ThinkingBlock` 抽推理 | **否** | 纯数据块；视觉读图阶段在 JVM 内持有多张 `byte[]` 再 Base64 编码进 `ImageBlock`。 |
+| **`StructuredOutputReminder`** | Agent builder | **枚举常量** | `StructuredOutputReminder.PROMPT`：在提示中约束 JSON 形状（`ChatFormAssistantResult` / `FormVisionExtraction`）。 |
+| **`StreamOptions`** | `FormVisionStreamService` 流式推理 | **否** | 订阅 `REASONING`、`SUMMARY`、`AGENT_RESULT`、`HINT`；`incremental=true` 映射为 SSE `thinking` / `assistant_text`。 |
+| **`EventType`** | `agent.stream(...).doOnNext` | **否** | 框架事件枚举；用于分支推送 SSE，不持久化。 |
+
+**非 AgentScope、但与运行时强相关**
+
+| 类 | 单例 | 作用 |
+|----|------|------|
+| **`agentscopeTaskExecutor`**（`AgentscopeAsyncConfig`） | **是** | 视觉 SSE：Controller 立即返回 `SseEmitter`，`runAnalysis` 在线程池执行（内部 `Flux.blockLast`，禁止占 Servlet 线程）。 |
+| **`UploadMaterialCoverageStore`** | **是**（`@Component`） | 按 `sessionId` 写 `upload_material_coverage.json`；与 `JsonSession` 目录并列，**不**进入 AgentScope 会话格式。 |
+
+### 为何这样用（设计原因）
+
+1. **`DashScopeChatModel` 单例**  
+   - 模型名、API Key、`stream`、是否开思考等属于**进程级配置**，构建成本高、无会话语义。  
+   - 文本与视觉**拆两枚 Bean**：避免流式/非流式、不同 `modelName` 互相污染。
+
+2. **`JsonSession` 单例 + `ReActAgent` 每请求新建**  
+   - AgentScope 的持久化 API 是「**Agent 实例** + **Session 存储**」：`loadIfExists` / `saveTo` 把 ReAct 状态写入 `{sessionRoot}/{sessionId}/`。  
+   - 若 Agent 也做成单例，则并发请求同一 `sessionId` 会争用内存与工具状态；**每请求新建 Agent** 可把并发隔离开，仅靠磁盘会话合并历史。  
+   - 文本与视觉**共用同一 `JsonSession` Bean、同一 `sessionId` 目录**，因此同一浏览器会话里「先聊后传图」可共享 Agent 落盘状态（具体取决于框架序列化内容）。
+
+3. **`InMemoryMemory` 每轮新建**  
+   - 视觉链路注释写明：**不要求跨轮对话记忆**，每轮 vision 用干净 memory，避免上一轮 OCR 残留干扰；持久化仍 `saveTo` 供后续文本轮次使用。  
+   - 文本链路同样每轮 `new InMemoryMemory()`，依赖 `loadIfExists` 恢复而非堆内单例 Memory。
+
+4. **`SkillBox` / `Toolkit` 每轮新建 + 条件注册技能**  
+   - `upload_guide_dialog` **仅**在 `UPLOAD_GUIDE_DIALOG_INTENT` 命中时注册，避免与 `form_vision_fill` 抢上下文。  
+   - 视觉请求**强制不注册** upload 技能，并在后处理里 `uploadGuide = null`。
+
+5. **结构化输出双通道（视觉）**  
+   - 主路径：`agent.stream(..., FormVisionExtraction.class)`，从 `AGENT_RESULT` 等事件取 `structuredData`。  
+   - 兜底：流结束仍无结构化体时再 `agent.call(...).block()`，兼容部分模型在流式通道不完整挂结构化字段的行为。
+
+### 优点
+
+| 优点 | 说明 |
+|------|------|
+| **配置集中** | Key、模型名、思考预算只在 `application.yml` + `DashScopeModelConfig` / `DashScopeSupport` 维护。 |
+| **文本/视觉隔离** | 两枚 Model Bean，互不改 `stream` 或 `modelName`。 |
+| **并发更安全** | 无全局 `ReActAgent`；同 session 并发请求不易共享可变 Agent 状态（仍需注意同 session 并发写盘的竞态，当前产品假设单用户单页）。 |
+| **路由灵活** | 每轮按需组装 `SkillBox`、系统提示与结构化 DTO 类型。 |
+| **可观测** | 视觉 SSE 把 `EventType` 映射为 `progress` / `thinking` / `assistant_text`，便于前端展示。 |
+| **与 Spring 契合** | 长连接异步 + 阻塞式 `call`/`blockLast` 分工明确。 |
+
+### 缺点与注意点
+
+| 缺点 / 风险 | 说明 |
+|-------------|------|
+| **每请求装配开销** | 每次 `new` Agent、Memory、Toolkit、读 classpath 技能 Markdown；高 QPS 时需关注 CPU 与类加载（可考虑缓存 `AgentSkill` 实例，当前未做）。 |
+| **Memory 与 Session 语义易混** | 「单例 JsonSession」≠「单例对话记忆」；记忆在磁盘，堆内 Memory 每轮为空壳 + load 恢复。 |
+| **同 session 并发写盘** | 多标签同时用同一 `sessionId` 调 `saveTo` 可能互相覆盖；演示场景通常单页单会话。 |
+| **阻塞在线程池** | 视觉 `blockLast(12min)`、文本 `block(3min)` 占 worker 线程；依赖有界池与 SSE 超时（30min）。 |
+| **双模型成本** | 文本、视觉各调一次 DashScope；无法靠「单 Agent 单例」合并调用。 |
+| **CLI 与 Web 不一致** | `demos/*` 在 `main` 中手写装配，**不**注入 Spring Bean；读代码时需区分入口。 |
+
+### CLI 示例包（`io.agentscope.demo.demos`）差异摘要
+
+| 示例类 | 额外 AgentScope 能力 | 与 Web 差异 |
+|--------|----------------------|-------------|
+| `SessionPersistenceDemo` | `JsonSession` + `saveTo` / `load` | 与 Web 会话思路一致，无 Spring |
+| `StructuredOutputDemo` | `StructuredOutputReminder` + 结构化 DTO | 同 Web 文本链路思路 |
+| `VisionDemo` | 多模态 `ImageBlock` | 同 Web 视觉，但无 SSE |
+| `SkillDemo` | `SkillBox` + classpath 技能 | 同技能加载方式 |
+| `AutoContextDemo` | `AutoContextMemory`、`ContextOffloadTool` | **Web 未使用** |
+| `Mem0LongTermDemo` | `Mem0LongTermMemory` | **Web 未使用** |
+
+### 相关配置与源码入口
+
+| 主题 | 类 / 文件 |
+|------|-----------|
+| Model Bean | `DashScopeModelConfig`, `DashScopeSupport`, `DashScopeProperties` |
+| Session Bean | `AgentscopeSessionConfig`, `AgentscopeProperties` |
+| 文本 Agent 装配 | `DemoChatService` |
+| 视觉 Agent 装配 + 流 | `FormVisionStreamService`, `FormVisionController` |
+| 技能封装 | `FormVisionFillSkillSupport`, `UploadGuideDialogSkillSupport` |
+| 结构化 DTO | `ChatFormAssistantResult`, `FormVisionExtraction` |
 
 ---
 
@@ -446,7 +584,7 @@ cd frontend && npm ci && npm run build
    未配置或无效时，应用可能启动失败或调用报错；请使用 **`DASHSCOPE_API_KEY`** 或 `application-local.yml`。
 
 2. **视觉 extended thinking**  
-   `DashScopeModelConfig` 注释说明：`qwen-vl-max` 在部分百炼参数组合下与 **正 `thinking_budget`** 不兼容可能返回 **400**。若出现类似错误，在配置中将 **`dashscope.vision-enable-thinking`** 设为 **`false`** 或调整预算，并阅读 `DashScopeSupport` / 官方文档。
+   `DashScopeModelConfig` 注释说明：当前视觉 Bean 使用 **`qwen3-vl-plus`**；部分模型与 **正 `thinking_budget`** 组合可能返回 **400**。若出现类似错误，将 **`dashscope.vision-enable-thinking`** 设为 **`false`** 或调整预算，并阅读 `DashScopeSupport` / 官方文档。
 
 3. **`sessionId` 400**  
    检查是否含非法字符或路径片段。
@@ -471,6 +609,7 @@ cd frontend && npm ci && npm run build
 | 覆盖与仍缺卡 | `UploadMaterialCoverageStore`, `MaterialFilenameInference`, `UploadGuideFromCoverage`, `MaterialSampleIds` |
 | 模型 Bean | `DashScopeModelConfig`, `DashScopeProperties` |
 | 会话路径 | `AgentscopeProperties`、`AgentscopeSessionConfig`（注册 `JsonSession`、启动时创建会话根目录） |
+| AgentScope 生命周期 | 见上文 **[AgentScope 核心类：生命周期与取舍](#agentscope-核心类生命周期与取舍)** |
 
 ---
 
