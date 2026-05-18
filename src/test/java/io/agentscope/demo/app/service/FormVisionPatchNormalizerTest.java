@@ -33,6 +33,16 @@ class FormVisionPatchNormalizerTest {
     }
 
     @Test
+    void mapsEnterpriseNameAliasToCompanyName() {
+        LinkedHashMap<String, Object> raw = new LinkedHashMap<>();
+        raw.put("enterpriseName", "陕西中辰海锋新能源有限公司");
+        var out = FormVisionPatchNormalizer.normalize(raw);
+        assertThat(out)
+                .containsEntry("companyName", "陕西中辰海锋新能源有限公司")
+                .doesNotContainKey("enterpriseName");
+    }
+
+    @Test
     void normalizesChineseRegistrationDateToIso() {
         LinkedHashMap<String, Object> raw = new LinkedHashMap<>();
         raw.put("establishmentDate", "2003年04月18日");

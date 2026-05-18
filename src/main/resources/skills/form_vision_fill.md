@@ -11,6 +11,7 @@
 本 Markdown **全文**由应用在**每一轮**请求中注入当前模型上下文（与 `SkillBox.registerSkill(form_vision_fill)` 等价）。你在同一请求内**始终**拥有本文件的完整规则，**禁止**在思考过程（reasoning / thinking）、内部独白或对用户可见的回复中声称「无法加载本技能」「未提供技能文档」「此处无法查看 form_vision_fill」「只能凭经验猜字段名」等——此类表述与运行事实不符。
 
 - `form_patch` **只能**使用下文「字段键（form_patch）」及后续各节**已写明**的 camelCase 键；**禁止**自造未在下文出现的键名（例如 `issuingAuthority`、`issueDate`、`validityPeriodStart`、`validityPeriodEnd`、`establishmentDate` 等——若未在清单中出现即不得输出）。  
+- 营业执照 / 工商主体「名称」「企业名称」**必须**写入 **`companyName`**；**禁止**使用 `enterpriseName`、`company_name`、`businessName` 等未在清单中的键（宿主归一化会映射，但模型仍应直接输出 `companyName`）。`ambiguities[].field_key` 对公司名称歧义同样使用 **`companyName`**。  
 - **营业执照**与**两类行政许可**字段分属不同前缀：工商主体信息用 `companyName`、`registrationDate`、`unifiedSocialCreditCode` 等；**危险化学品经营许可证 / 安全生产类**证面字段用 `safetyAdminLicenseName`、`safetyLicenseNo`、`safetyLicenseValidityMode`、`safetyLicenseValidityRange`、`safetyIssuingAuthority`、`safetyLegalRepresentative`；**道路危险货物运输**证面字段用 `transportAdminLicenseName`、`transportLicenseNo`、`transportLicenseValidityMode`、`transportLicenseValidityRange`、`transportIssuingAuthority`、`transportLegalRepresentative`（与证类严格对应，勿混用两套前缀）。
 
 ## 字段键（form_patch）

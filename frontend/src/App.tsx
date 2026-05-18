@@ -192,6 +192,12 @@ function normalizeVisionFormPatch(patch: Record<string, unknown>): Partial<FormV
   return out as Partial<FormValues>;
 }
 
+/** 歧义 field_key 与表单 name 的已知别名（模型偶发 enterpriseName 等）。 */
+const AMBIGUITY_FIELD_KEY_ALIASES: Record<string, string> = {
+  enterpriseName: "companyName",
+  businessName: "companyName",
+};
+
 /** 将模型/后端可能返回的 field_key 转为与 Form.Item name 一致的 camelCase（与后端 camelCase 键一致）。 */
 function normalizeVisionAmbiguityFieldKey(raw: string): string {
   let k = (raw ?? "").trim();
@@ -199,7 +205,7 @@ function normalizeVisionAmbiguityFieldKey(raw: string): string {
   if (k.includes("_")) {
     k = k.replace(/_([a-zA-Z0-9])/g, (_, ch: string) => ch.toUpperCase());
   }
-  return k;
+  return AMBIGUITY_FIELD_KEY_ALIASES[k] ?? k;
 }
 
 /** 与后端 FormVisionMultiEntityConflictDetector.CLEAR_FIELD_SENTINEL 一致。 */

@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -207,7 +208,9 @@ public class DemoChatService {
             if (structured != null
                     && structured.formPatch != null
                     && !structured.formPatch.isEmpty()) {
-                patch = structured.formPatch;
+                patch =
+                        FormVisionPatchNormalizer.normalize(
+                                new LinkedHashMap<>(structured.formPatch));
             }
 
             UploadGuideDto uploadGuide = structured != null ? structured.uploadGuide : null;

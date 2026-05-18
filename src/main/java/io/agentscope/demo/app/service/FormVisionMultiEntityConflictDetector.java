@@ -586,7 +586,15 @@ public final class FormVisionMultiEntityConflictDetector {
             if (v.isEmpty()) {
                 continue;
             }
-            if ("companyname".equals(k) || "name".equals(k)) {
+            if ("companyname".equals(k)
+                    || "enterprisename".equals(k)
+                    || "enterprise_name".equals(k)
+                    || "company_name".equals(k)
+                    || "name".equals(k)) {
+                out.add(v);
+                continue;
+            }
+            if (k.contains("enterprise") && k.contains("name") && !k.contains("type")) {
                 out.add(v);
                 continue;
             }

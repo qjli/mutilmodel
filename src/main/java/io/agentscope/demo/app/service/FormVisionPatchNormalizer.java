@@ -69,9 +69,13 @@ public final class FormVisionPatchNormalizer {
         // 营业执照 / 工商（单图常见别名）
         alias("creditcode", "unifiedSocialCreditCode");
         alias("socialcreditcode", "unifiedSocialCreditCode");
-        alias("name", "companyName");
         alias("businessname", "companyName");
         alias("companynamecn", "companyName");
+        // 模型常见自造键：与前端 Form.Item name=companyName 对齐
+        alias("enterprisename", "companyName");
+        alias("enterprise_name", "companyName");
+        alias("company_name", "companyName");
+        alias("enterprisecompanyname", "companyName");
         alias("legalrep", "legalRepresentative");
         alias("legalrepresentative", "legalRepresentative");
         alias("establishmentdate", "registrationDate");
@@ -290,6 +294,19 @@ public final class FormVisionPatchNormalizer {
         // transport* / safety* 未命中表则丢弃，避免脏键
         if (lower.startsWith("transport") || lower.startsWith("safety")) {
             return null;
+        }
+        // enterpriseName / 企业名称 等 → companyName（勿与 enterpriseType 混淆）
+        if (lower.contains("enterprise") && lower.contains("name") && !lower.contains("type")) {
+            return "companyName";
+        }
+        if (lower.contains("company")
+                && lower.contains("name")
+                && !lower.contains("type")
+                && !lower.contains("short")
+                && !lower.contains("phone")
+                && !lower.contains("email")
+                && !lower.contains("fax")) {
+            return "companyName";
         }
         return null;
     }
